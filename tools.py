@@ -625,14 +625,339 @@ def _check_video_requirements(
             ),
         }
 
+
+        # ----------------------------------------------------
+        # 9. 根据项目配置检查音频与字幕规范
+        # ----------------------------------------------------
+
+        # 读取音频和字幕规范。
+        # 这样以后修改 project.json，就可以调整检查标准。
+        audio_requirements = project.get(
+            "audio_requirements", {}
+        )
+
+        subtitle_requirements = project.get(
+            "subtitle_requirements", {}
+        )
+
+        # 避免配置结构异常时，调用 get() 导致检查中断
+        if not isinstance(audio_requirements, dict):
+            audio_requirements = {}
+
+        if not isinstance(subtitle_requirements, dict):
+            subtitle_requirements = {}
+
+        background_music_allowed = (
+            audio_requirements.get(
+                "background_music_allowed"
+            )
+        )
+
+        dialogue_allowed = (
+            audio_requirements.get(
+                "dialogue_allowed"
+            )
+        )
+
+        subtitle_stream_allowed = (
+            subtitle_requirements.get(
+                "subtitle_stream_allowed"
+            )
+        )
+
+        burned_in_subtitles_allowed = (
+            subtitle_requirements.get(
+                "burned_in_subtitles_allowed"
+            )
+        )
+
+        # 获取之前已经由 ffprobe 统计的媒体流信息
+        stream_summary = video_info.get(
+            "stream_summary", {}
+        )
+
+        audio_stream_count = stream_summary.get(
+            "audio_stream_count", 0
+        )
+
+        subtitle_stream_count = stream_summary.get(
+            "subtitle_stream_count", 0
+        )
+
+        has_audio = stream_summary.get(
+            "has_audio", audio_stream_count > 0
+        )
+
+        has_subtitle_stream = stream_summary.get(
+            "has_subtitle_stream",
+            subtitle_stream_count > 0,
+        )
+
+        # ----------------------------------------------------
+        # 9.1 检查独立字幕轨道
+        # ----------------------------------------------------
+
+        if subtitle_stream_allowed is False:
+
+            if has_subtitle_stream:
+                subtitle_status = "fail"
+
+                subtitle_message = (
+                    f"项目不允许独立字幕轨道，"
+                    f"但视频检测到了 "
+                    f"{subtitle_stream_count} 条字幕轨道。"
+                )
+
+            else:
+                subtitle_status = "pass"
+
+                subtitle_message = (
+                    "项目不允许独立字幕轨道，"
+                    "当前视频没有检测到独立字幕轨道。"
+                )
+
+        elif subtitle_stream_allowed is True:
+            subtitle_status = "pass"
+
+            subtitle_message = (
+                "项目允许独立字幕轨道，"
+                "本项不会因字幕轨道存在而判为不合格。"
+            )
+
+        else:
+            subtitle_status = "not_configured"
+
+            subtitle_message = (
+                "项目没有配置独立字幕轨道的允许规则，"
+                "因此不进行合格性判断。"
+            )
+
+        checks["subtitle_stream"] = {
+            "status": subtitle_status,
+            "allowed": subtitle_stream_allowed,
+            "actual_count": subtitle_stream_count,
+            "actual_present": has_subtitle_stream,
+            "message": subtitle_message,
+        }
+
+        # ----------------------------------------------------
+        # 9.2 检查背景音乐规范
+        # ----------------------------------------------------
+
+        if background_music_allowed is True:
+
+            background_music_status = "pass"
+
+            background_music_message = (
+                "项目允许背景音乐，"
+                "本项不会因背景音乐存在而判为不合格。"
+            )
+
+        elif background_music_allowed is False:
+
+            if not has_audio:
+                # 没有音频流，就没有通过音频流封装的 BGM
+                background_music_status = "pass"
+
+                background_music_message = (
+                    "视频没有检测到音频流，"
+                    "因此没有通过音频流封装的背景音乐。"
+                )
+
+            else:
+                # 有音频不等于一定有 BGM，
+                # 也可能只有人物对白，因此不能直接判 fail。
+                background_music_status = "not_checked"
+
+                background_music_message = (
+                    f"项目不允许背景音乐，"
+                    f"但当前检测到 {audio_stream_count} 条音频流。"
+                    "ffprobe 只能读取媒体流信息，"
+                    "不能判断音频具体是对白、背景音乐，"
+                    "还是两者混合。需要进一步分析音频内容。"
+                )
+
+        else:
+            background_music_status = "not_configured"
+
+            background_music_message = (
+                "项目没有配置背景音乐的允许规则，"
+                "因此不进行合格性判断。"
+            )
+
+        checks["background_music"] = {
+            "status": background_music_status,
+            "allowed": background_music_allowed,
+            "audio_stream_count": audio_stream_count,
+            "has_audio": has_audio,
+            "message": background_music_message,
+        }
+
+        # ----------------------------------------------------
+        # 9.3 检查画面内嵌字幕规范
+        # ----------------------------------------------------
+
+        if burned_in_subtitles_allowed is True:
+
+            burned_subtitle_status = "pass"
+
+            burned_subtitle_message = (
+                "项目允许画面内嵌字幕。"
+                "当前版本不检查画面内是否实际存在字幕。"
+            )
+
+        elif burned_in_subtitles_allowed is False:
+
+            burned_subtitle_status = "not_checked"
+
+            burned_subtitle_message = (
+                "项目不允许画面内嵌字幕，"
+                "但当前版本还不能识别画面中的文字。"
+                "没有独立字幕轨道不代表没有内嵌字幕，"
+                "需要后续增加画面文字检测能力。"
+            )
+
+        else:
+            burned_subtitle_status = "not_configured"
+
+            burned_subtitle_message = (
+                "项目没有配置画面内嵌字幕的允许规则，"
+                "因此不进行合格性判断。"
+            )
+
+        checks["burned_in_subtitles"] = {
+            "status": burned_subtitle_status,
+            "allowed": burned_in_subtitles_allowed,
+            "message": burned_subtitle_message,
+        }
+
+        # ----------------------------------------------------
+        # 9.4 记录人物对白规范
+        # ----------------------------------------------------
+
+        if dialogue_allowed is True:
+            dialogue_status = "not_applicable"
+            dialogue_message = (
+                "项目允许人物对白，且没有规定必须出现对白，"
+                "因此不需要判断视频中是否实际包含人声。"
+            )
+
+        elif dialogue_allowed is False:
+            dialogue_status = "not_checked"
+            dialogue_message = (
+                "项目不允许人物对白，但当前版本尚不能识别"
+                "音轨中的人声，需要后续增加语音检测能力。"
+            )
+
+        else:
+            dialogue_status = "not_configured"
+            dialogue_message = (
+                "项目没有配置人物对白规则，"
+                "因此不进行合格性判断。"
+            )
+
+        checks["dialogue_content"] = {
+            "status": dialogue_status,
+            "allowed": dialogue_allowed,
+            "message": dialogue_message,
+        }
+
+        # ----------------------------------------------------
+        # 10. 汇总所有检查项的合规状态
+        # ----------------------------------------------------
+
+        status_counts = {
+            "pass": 0,
+            "fail": 0,
+            "not_checked": 0,
+            "not_configured": 0,
+            "not_applicable": 0,
+            "informational": 0,
+        }
+
+        failures = []
+        review_items = []
+
+        # 整集时长目前只有目标值，没有允许误差。
+        # 因此低于或高于目标时，只能要求复核，不能直接判为违规。
+        informational_statuses = {
+            "at_target",
+            "below_target",
+            "above_target",
+        }
+
+        for check_name, check_detail in checks.items():
+
+            status = check_detail.get("status")
+
+            if status in status_counts:
+                status_counts[status] += 1
+
+            elif status in informational_statuses:
+                status_counts["informational"] += 1
+
+            # 已经发现明确不合格的项目
+            if status == "fail":
+                failures.append({
+                    "check": check_name,
+                    "message": check_detail.get(
+                        "message", ""
+                    ),
+                })
+
+            # 无法检测或缺少检查标准的项目
+            elif status in {
+                "not_checked",
+                "not_configured",
+            }:
+                review_items.append({
+                    "check": check_name,
+                    "status": status,
+                    "message": check_detail.get(
+                        "message", ""
+                    ),
+                })
+
+            # 整集时长偏离目标，但尚无允许误差标准
+            elif status in {
+                "below_target",
+                "above_target",
+            }:
+                review_items.append({
+                    "check": check_name,
+                    "status": status,
+                    "message": check_detail.get(
+                        "message", ""
+                    ),
+                })
+
+        # 确定整体合规状态
+        if failures:
+            overall_status = "fail"
+
+        elif review_items:
+            overall_status = "needs_review"
+
+        else:
+            overall_status = "pass"
+
+        compliance_summary = {
+            "overall_status": overall_status,
+            "status_counts": status_counts,
+            "failures": failures,
+            "needs_review": review_items,
+        }
+
         # ----------------------------------------------------
         # 9. 整理最终检查结果
         # ----------------------------------------------------
 
+        
         result = {
             "success": True,
             "video_scope": video_scope,
             "video_info": video_info,
+            "compliance_summary": compliance_summary,
             "project_requirements": {
                 "aspect_ratio": expected_aspect_ratio,
                 "target_duration_seconds": (
@@ -644,9 +969,24 @@ def _check_video_requirements(
                 "character_style": project.get(
                     "character_style"
                 ),
+                "audio_requirements": {
+                    "background_music_allowed": (
+                        background_music_allowed
+                    ),
+                    "dialogue_allowed": dialogue_allowed,
+                },
+                "subtitle_requirements": {
+                    "subtitle_stream_allowed": (
+                        subtitle_stream_allowed
+                    ),
+                    "burned_in_subtitles_allowed": (
+                        burned_in_subtitles_allowed
+                    ),
+                },
             },
             "checks": checks,
         }
+
 
         return json.dumps(
             result,
