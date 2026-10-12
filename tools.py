@@ -64,21 +64,19 @@ def get_project_info() -> str:
 # 3. 普通 Python 函数：读取视频元数据
 # ============================================================
 
+
 def _get_video_info(video_path: str) -> str:
     """
     使用 ffprobe 读取本地视频文件的实际信息。
 
-    Args:
-        video_path: 本地视频文件的完整路径。
-
-    Returns:
-        JSON 字符串，包括：
-        - file_name：文件名
-        - file_path：完整路径
-        - duration_seconds：视频时长
-        - width：视频宽度
-        - height：视频高度
-        - fps：视频帧率
+    返回 JSON 字符串，包括：
+    - file_name：文件名
+    - file_path：完整路径
+    - duration_seconds：视频时长
+    - width / height：视频分辨率
+    - fps：视频帧率
+    - stream_summary：媒体流统计摘要
+    - streams：各媒体流的详细信息
     """
 
     print(
@@ -94,9 +92,7 @@ def _get_video_info(video_path: str) -> str:
             return "读取视频失败：系统中找不到 ffprobe。"
 
         # 2. 验证输入路径
-        video_file = Path(
-            video_path
-        ).expanduser()
+        video_file = Path(video_path).expanduser()
 
         if not video_file.exists():
             return (
@@ -108,17 +104,25 @@ def _get_video_info(video_path: str) -> str:
                 f"读取视频失败：路径不是文件：{video_file}"
             )
 
-        # 3. 构造 ffprobe 命令
+        # 3. 读取全部媒体流，而不是只读取第一条视频流
+        #
+        # video: 视频流
+        # audio: 音频流
+        # subtitle: 独立字幕流
+        #
+        # 同时读取视频时长、编码格式及相关媒体属性。
         command = [
             ffprobe_path,
             "-v",
             "error",
-            "-select_streams",
-            "v:0",
             "-show_entries",
-            "stream=width,height,r_frame_rate",
-            "-show_entries",
-            "format=duration",
+            (
+                "stream=index,codec_type,codec_name,"
+                "width,height,r_frame_rate,"
+                "sample_rate,channels:"
+                "stream_tags=language,title:"
+                "format=duration"
+            ),
             "-of",
             "json",
             str(video_file),
@@ -146,39 +150,175 @@ def _get_video_info(video_path: str) -> str:
         # 5. 解析 ffprobe 返回的 JSON
         data = json.loads(result.stdout)
 
-        streams = data.get("streams", [])
+        raw_streams = data.get("streams", [])
         format_data = data.get("format", {})
 
-        if not streams:
+        # 没有媒体流时，直接报告错误
+        if not raw_streams:
+            return "读取视频失败：文件中没有找到媒体流。"
+
+        # 获取容器报告的视频时长
+        raw_duration = format_data.get("duration")
+
+        try:
+            duration = float(raw_duration)
+        except (TypeError, ValueError):
+            return (
+                "读取视频失败：ffprobe 没有返回"
+                "有效的视频时长。"
+            )
+
+        # 6. 统一整理全部媒体流的数据
+        normalized_streams = []
+
+        for stream in raw_streams:
+            codec_type = stream.get(
+                "codec_type",
+                "unknown",
+            )
+
+            stream_info = {
+                "index": stream.get("index"),
+                "codec_type": codec_type,
+                "codec_name": stream.get("codec_name"),
+            }
+
+            # 视频流：记录分辨率与帧率
+            if codec_type == "video":
+
+                if stream.get("width") is not None:
+                    stream_info["width"] = int(
+                        stream["width"]
+                    )
+
+                if stream.get("height") is not None:
+                    stream_info["height"] = int(
+                        stream["height"]
+                    )
+
+                raw_fps = stream.get("r_frame_rate")
+
+                try:
+                    fps = (
+                        float(Fraction(raw_fps))
+                        if raw_fps
+                        else None
+                    )
+                except (
+                    ValueError,
+                    ZeroDivisionError,
+                    TypeError,
+                ):
+                    fps = None
+
+                stream_info["fps"] = (
+                    round(fps, 3)
+                    if fps is not None
+                    else None
+                )
+
+            # 音频流：记录采样率与声道数
+            elif codec_type == "audio":
+
+                if stream.get("sample_rate") is not None:
+                    try:
+                        stream_info["sample_rate"] = int(
+                            stream["sample_rate"]
+                        )
+                    except (TypeError, ValueError):
+                        stream_info["sample_rate"] = (
+                            stream["sample_rate"]
+                        )
+
+                if stream.get("channels") is not None:
+                    stream_info["channels"] = int(
+                        stream["channels"]
+                    )
+
+            # 字幕流不需要额外解析画面内容。
+            # 这里只确认它是否作为独立媒体流存在。
+
+            # 保留媒体流附带的语言与标题信息
+            tags = stream.get("tags", {})
+
+            if tags.get("language"):
+                stream_info["language"] = tags["language"]
+
+            if tags.get("title"):
+                stream_info["title"] = tags["title"]
+
+            normalized_streams.append(stream_info)
+
+        # 7. 找到第一条视频流，保持原有视频信息接口兼容
+        video_streams = [
+            stream
+            for stream in normalized_streams
+            if stream["codec_type"] == "video"
+        ]
+
+        if not video_streams:
             return "读取视频失败：没有找到视频流。"
 
-        video_stream = streams[0]
+        video_stream = video_streams[0]
 
-        # 6. 提取视频实际信息
-        duration = float(format_data["duration"])
+        if (
+            video_stream.get("width") is None
+            or video_stream.get("height") is None
+        ):
+            return (
+                "读取视频失败：无法读取有效的视频"
+                "宽度和高度。"
+            )
 
-        width = int(video_stream["width"])
-        height = int(video_stream["height"])
+        # 8. 统计各类媒体流数量
+        video_count = sum(
+            1
+            for stream in normalized_streams
+            if stream["codec_type"] == "video"
+        )
 
-        raw_fps = video_stream.get("r_frame_rate")
+        audio_count = sum(
+            1
+            for stream in normalized_streams
+            if stream["codec_type"] == "audio"
+        )
 
-        if not raw_fps or raw_fps == "0/0":
-            fps = None
-        else:
-            fps = float(Fraction(raw_fps))
+        subtitle_count = sum(
+            1
+            for stream in normalized_streams
+            if stream["codec_type"] == "subtitle"
+        )
 
-        # 7. 整理结果，供业务检查函数和 Agent 使用
+        other_count = sum(
+            1
+            for stream in normalized_streams
+            if stream["codec_type"]
+            not in {"video", "audio", "subtitle"}
+        )
+
+        stream_summary = {
+            "video_stream_count": video_count,
+            "audio_stream_count": audio_count,
+            "subtitle_stream_count": subtitle_count,
+            "other_stream_count": other_count,
+            "has_audio": audio_count > 0,
+            "has_subtitle_stream": subtitle_count > 0,
+        }
+
+        # 9. 整理最终结果
+        #
+        # 保留原来的 file_name、file_path、duration_seconds、
+        # width、height、fps 字段。
+        # 新增 stream_summary 与 streams。
         video_info = {
             "file_name": video_file.name,
             "file_path": str(video_file.resolve()),
             "duration_seconds": round(duration, 3),
-            "width": width,
-            "height": height,
-            "fps": (
-                round(fps, 3)
-                if fps is not None
-                else None
-            ),
+            "width": video_stream["width"],
+            "height": video_stream["height"],
+            "fps": video_stream["fps"],
+            "stream_summary": stream_summary,
+            "streams": normalized_streams,
         }
 
         return json.dumps(
