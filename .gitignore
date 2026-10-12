@@ -1,0 +1,27 @@
+﻿# Python 虚拟环境
+.venv/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# API Key、环境变量和秘密配置
+.env
+.env.*
+!.env.example
+
+# 本地视频与媒体测试文件
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+*.wav
+*.mp3
+
+# 日志文件
+*.log
+
+# 编辑器配置
+.vscode/
+.idea/

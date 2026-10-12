@@ -1,0 +1,175 @@
+
+import gradio as gr
+from openai import AsyncOpenAI
+
+from agents import (
+    Agent,
+    Runner,
+    OpenAIChatCompletionsModel,
+    set_tracing_disabled,
+)
+
+from tools import (
+    get_project_info,
+    get_video_info,
+    check_video_requirements,
+)
+
+# 这是个人本地应用，关闭不需要的远程追踪上传
+set_tracing_disabled(disabled=True)
+
+
+# 根据界面输入的 API Key 创建 Agent
+def build_agent(api_key: str):
+    client = AsyncOpenAI(
+        api_key=api_key.strip(),
+        base_url="https://api.deepseek.com",
+    )
+
+    model = OpenAIChatCompletionsModel(
+        model="deepseek-flash",
+        openai_client=client,
+    )
+
+    agent = Agent(
+        name="动画制作助手",
+      instructions=(
+    "你是一名动画制作助手。"
+
+    "当用户询问项目的画幅、目标时长、"
+    "角色风格或其他项目资料时，"
+    "调用 get_project_info 查询真实项目文件。"
+
+    "如果用户要求检查具体视频是否符合项目规范，"
+    "只使用 check_video_requirements 完成规范检查。"
+    "不要为了进行规范检查而额外调用 get_project_info。"
+    "check_video_requirements 会自行读取项目配置。"
+
+    "只有当用户单独询问项目规范、项目资料或配置内容，"
+    "而没有要求检查具体视频时，"
+    "才调用 get_project_info。"
+
+    "当用户只要求读取视频实际信息时，"
+    "调用 get_video_info。"
+
+    "当用户要求检查视频是否符合项目规范时，"
+    "调用 check_video_requirements。"
+
+    "check_video_requirements 的 video_scope "
+    "只有两个合法值："
+    "episode 表示整集视频，"
+    "shot 表示单个镜头。"
+
+    "如果用户明确说明视频是整集，"
+    "使用 episode。"
+
+    "如果用户明确说明视频是单个镜头，"
+    "使用 shot。"
+
+    "如果用户没有说明视频是整集还是单个镜头，"
+    "不要自行猜测。"
+    "先获取视频实际信息；"
+    "如果规范检查必须区分视频范围，"
+    "向用户询问视频属于整集还是单个镜头。"
+
+    "check_video_requirements 已经负责进行确定性的"
+    "画幅和时长检查。"
+    "不要自行重新计算检查结果，"
+    "应以工具返回的 checks 结果为准。"
+
+    "项目中的 target_duration_seconds 表示整集目标时长。"
+    "max_shot_duration_seconds 表示单镜头最大时长。"
+    "不能混淆这两个概念。"
+
+    "当前工具无法检查字幕、音轨内容、"
+    "画面中的角色风格、构图或每个镜头的实际数量。"
+    "不要声称已经完成这些检查。"
+
+    "只根据工具返回的真实信息回答。"
+    "如果工具返回错误，明确告诉用户工具执行失败。"
+
+    "请使用中文回答。"
+),
+        model=model,
+       tools=[
+    get_project_info,
+    get_video_info,
+    check_video_requirements,
+],
+    )
+
+    return agent, client
+
+
+# Gradio 会把用户问题、对话历史和密钥传给这个函数
+async def chat(message, history, api_key):
+    if not api_key or not api_key.strip():
+        return "请先在“模型设置”中输入 DeepSeek API Key。"
+
+    agent, client = build_agent(api_key)
+
+    try:
+        # 将最近的聊天记录整理成上下文
+        history_lines = []
+
+        for item in (history or [])[-8:]:
+            if not isinstance(item, dict):
+                continue
+
+            role = item.get("role")
+            content = item.get("content", "")
+
+            if role == "user" and isinstance(content, str):
+                history_lines.append(f"用户：{content}")
+            elif role == "assistant" and isinstance(content, str):
+                history_lines.append(f"助手：{content}")
+
+        if history_lines:
+            prompt = (
+                "以下是此前的对话记录：\n"
+                + "\n".join(history_lines)
+                + "\n\n当前用户的问题：\n"
+                + message
+            )
+        else:
+            prompt = message
+
+        # 运行 Agent，等待模型回答或调用工具
+        result = await Runner.run(agent, prompt)
+
+        return result.final_output
+
+    except Exception as exc:
+        # 不打印 API Key，也不把异常细节直接返回到聊天窗口
+        print(f"请求失败，错误类型：{type(exc).__name__}")
+        return (
+            "请求失败。请检查 API Key、模型名称、网络连接和账户额度。"
+            "具体排查时请查看启动终端。"
+        )
+
+    finally:
+        # 关闭本次请求使用的客户端
+        await client.close()
+
+
+# 密钥输入框使用密码显示形式
+key_input = gr.Textbox(
+    label="DeepSeek API Key",
+    type="password",
+    placeholder="在这里输入你的 API Key",
+)
+
+demo = gr.ChatInterface(
+    fn=chat,
+    title="动画制作 Agent",
+    description="输入问题，让 Agent 查询项目资料并回答。",
+    additional_inputs=[key_input],
+    additional_inputs_accordion="模型设置",
+)
+
+if __name__ == "__main__":
+    demo.launch(
+        server_name="127.0.0.1",
+        server_port=7860,
+        share=False,
+    )

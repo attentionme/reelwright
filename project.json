@@ -1,0 +1,8 @@
+{
+    "project_name": "动画制作助手",
+    "aspect_ratio": "9:16",
+    "target_duration_seconds": 45,
+    "max_shot_duration_seconds": 12,
+    "character_style": "二维角色叠加写实背景",
+    "description": "一个用于动画制作流程辅助的 AI Agent 项目"
+}
