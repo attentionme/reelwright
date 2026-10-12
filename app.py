@@ -45,20 +45,21 @@ def build_agent(api_key: str):
     "不要为了进行规范检查而额外调用 get_project_info。"
     "check_video_requirements 会自行读取项目配置。"
 
-    "只有当用户单独询问项目规范、项目资料或配置内容，"
-    "而没有要求检查具体视频时，"
+    "只有当用户单独询问项目资料或配置，"
+    "且没有要求检查具体视频时，"
     "才调用 get_project_info。"
 
-    "当用户只要求读取视频实际信息时，"
-    "调用 get_video_info。"
+    "只有当用户只要求读取视频实际信息，"
+    "而不要求检查项目规范时，"
+    "才调用 get_video_info。"
 
-    "当用户要求检查视频是否符合项目规范时，"
-    "调用 check_video_requirements。"
+    "当用户要求检查具体视频是否符合项目规范时，"
+    "使用 check_video_requirements 完成规范检查。"
 
-    "check_video_requirements 的 video_scope "
-    "只有两个合法值："
-    "episode 表示整集视频，"
-    "shot 表示单个镜头。"
+    "check_video_requirements 会自行读取视频元数据"
+    "和项目配置。"
+    "进行这项规范检查时，不要再额外调用"
+    "get_project_info 或 get_video_info 重复获取数据。"
 
     "如果用户明确说明视频是整集，"
     "使用 episode。"
