@@ -369,6 +369,82 @@ def get_video_info(video_path: str) -> str:
 # 5. 普通 Python 函数：执行视频规范检查
 # ============================================================
 
+def _parse_silencedetect_output(
+    ffmpeg_output: str,
+    duration_seconds: float,
+) -> list:
+    """
+    解析 FFmpeg silencedetect 的 stderr 输出。
+
+    纯函数：不调用 ffmpeg，不访问文件，不访问网络。
+
+    Args:
+        ffmpeg_output:
+            FFmpeg 在 stderr 中输出的文本。
+        duration_seconds:
+            媒体总时长，用于处理“视频结束时仍处于静音”的边界情况。
+
+    Returns:
+        静音区间列表，每项为：
+        {
+            "start_seconds": float,
+            "end_seconds": float,
+            "duration_seconds": float,
+        }
+    """
+
+    silence_start_pattern = re.compile(
+        r"silence_start:\s*([0-9.]+)"
+    )
+    silence_end_pattern = re.compile(
+        r"silence_end:\s*([0-9.]+)"
+        r"\s*\|\s*silence_duration:\s*([0-9.]+)"
+    )
+
+    silence_intervals = []
+    current_silence_start = None
+
+    for line in ffmpeg_output.splitlines():
+        start_match = silence_start_pattern.search(line)
+
+        if start_match:
+            current_silence_start = float(start_match.group(1))
+            continue
+
+        end_match = silence_end_pattern.search(line)
+
+        if end_match and current_silence_start is not None:
+            silence_end = float(end_match.group(1))
+            silence_duration = float(end_match.group(2))
+
+            silence_intervals.append(
+                {
+                    "start_seconds": current_silence_start,
+                    "end_seconds": silence_end,
+                    "duration_seconds": silence_duration,
+                }
+            )
+
+            current_silence_start = None
+
+    # 视频结束时仍处于静音状态
+    if current_silence_start is not None:
+        silence_end = duration_seconds
+        silence_duration = max(
+            0.0,
+            silence_end - current_silence_start,
+        )
+
+        silence_intervals.append(
+            {
+                "start_seconds": current_silence_start,
+                "end_seconds": silence_end,
+                "duration_seconds": silence_duration,
+            }
+        )
+
+    return silence_intervals
+
 
 def _analyze_audio_activity(video_path: str) -> str:
     """
@@ -535,60 +611,13 @@ def _analyze_audio_activity(video_path: str) -> str:
     # ----------------------------------------------------
     # 3. 解析 silence_start / silence_end
     # ----------------------------------------------------
-    silence_start_pattern = re.compile(
-        r"silence_start:\s*([0-9.]+)"
-    )
-    silence_end_pattern = re.compile(
-        r"silence_end:\s*([0-9.]+)"
-        r"\s*\|\s*silence_duration:\s*([0-9.]+)"
+    silence_intervals = _parse_silencedetect_output(
+        ffmpeg_output=ffmpeg_output,
+        duration_seconds=duration_seconds,
     )
 
-    silence_intervals = []
-    current_silence_start = None
-
-    for line in ffmpeg_output.splitlines():
-        start_match = silence_start_pattern.search(line)
-
-        if start_match:
-            current_silence_start = float(start_match.group(1))
-            continue
-
-        end_match = silence_end_pattern.search(line)
-
-        if end_match and current_silence_start is not None:
-            silence_end = float(end_match.group(1))
-            silence_duration = float(end_match.group(2))
-
-            silence_intervals.append(
-                {
-                    "start_seconds": current_silence_start,
-                    "end_seconds": silence_end,
-                    "duration_seconds": silence_duration,
-                }
-            )
-
-            current_silence_start = None
-
     # ----------------------------------------------------
-    # 4. 处理视频结束时仍处于静音状态的情况
-    # ----------------------------------------------------
-    if current_silence_start is not None:
-        silence_end = duration_seconds
-        silence_duration = max(
-            0.0,
-            silence_end - current_silence_start,
-        )
-
-        silence_intervals.append(
-            {
-                "start_seconds": current_silence_start,
-                "end_seconds": silence_end,
-                "duration_seconds": silence_duration,
-            }
-        )
-
-    # ----------------------------------------------------
-    # 5. 计算音频活动情况
+    # 4. 计算音频活动情况
     # ----------------------------------------------------
     silence_duration_seconds = sum(
         item["duration_seconds"]
@@ -650,7 +679,6 @@ def _analyze_audio_activity(video_path: str) -> str:
         },
         ensure_ascii=False,
     )
-
 
 
 def _build_video_issue_report(
