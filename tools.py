@@ -665,6 +665,9 @@ def _build_video_issue_report(
     """
 
     report_items = []
+    passed_items = []
+    not_applicable_items = []
+    unclassified_items = []
 
     title_by_check = {
         "aspect_ratio": "画幅不符合项目要求",
@@ -677,6 +680,20 @@ def _build_video_issue_report(
         "audio_activity": "音频活动分析结果",
     }
 
+    passed_title_by_check = {
+        "aspect_ratio": "画幅检查通过",
+        "duration": "时长检查通过",
+        "fps": "帧率检查通过",
+        "subtitle_stream": "独立字幕轨道检查通过",
+        "background_music": "背景音乐规则检查通过",
+        "burned_in_subtitles": "内嵌字幕规则检查通过",
+        "dialogue_content": "对白内容检查通过",
+        "audio_activity": "音频活动分析完成",
+    }
+
+    not_applicable_title_by_check = {
+        "dialogue_content": "对白内容检查不适用",
+    }
     # 为不同类型的问题提供明确的处理建议。
     recommendation_by_check = {
         "aspect_ratio": (
@@ -709,12 +726,57 @@ def _build_video_issue_report(
         ),
     }
 
+
     for check_name, detail in checks.items():
         status = detail.get("status")
+        original_message = detail.get("message", "")
 
-        # 合格项和不需要检查的项目，不列入问题报告。
-        if status in {"pass", "not_applicable", "at_target"}:
+        # ------------------------------------------------
+        # 1. 明确通过的项目
+        # ------------------------------------------------
+        if status == "pass":
+            passed_items.append({
+                "check": check_name,
+                "status": status,
+                "title": passed_title_by_check.get(
+                    check_name,
+                    f"{check_name} 检查通过",
+                ),
+                "reason": original_message,
+                "original_message": original_message,
+            })
             continue
+
+        # ------------------------------------------------
+        # 2. 整集时长恰好达到目标
+        # 不属于普通 pass，单独记录原始状态。
+        # ------------------------------------------------
+        if status == "at_target":
+            passed_items.append({
+                "check": check_name,
+                "status": status,
+                "title": "整集时长达到目标",
+                "reason": original_message,
+                "original_message": original_message,
+            })
+            continue
+
+        # ------------------------------------------------
+        # 3. 不适用的项目
+        # ------------------------------------------------
+        if status == "not_applicable":
+            not_applicable_items.append({
+                "check": check_name,
+                "status": status,
+                "title": not_applicable_title_by_check.get(
+                    check_name,
+                    f"{check_name} 检查不适用",
+                ),
+                "reason": original_message,
+                "original_message": original_message,
+            })
+            continue
+
 
         # 把原始检测状态映射成便于用户理解的级别。
         if status == "fail":
@@ -732,7 +794,14 @@ def _build_video_issue_report(
             severity = "info"
 
         else:
-            # 不认识的状态不直接当作问题，避免误报。
+            # 保留未知状态，避免生成报告时静默丢失检查项。
+            unclassified_items.append({
+                "check": check_name,
+                "status": status,
+                "title": f"{check_name} 状态暂无法归类",
+                "reason": original_message or "暂无详细说明。",
+                "original_message": original_message,
+            })
             continue
 
         title = title_by_check.get(
@@ -832,6 +901,11 @@ def _build_video_issue_report(
     # 汇总各级别的问题数量。
     # ----------------------------------------------------
 
+
+    # ----------------------------------------------------
+    # 汇总报告中的各类项目数量
+    # ----------------------------------------------------
+
     error_count = sum(
         1 for item in report_items
         if item["severity"] == "error"
@@ -847,6 +921,19 @@ def _build_video_issue_report(
         if item["severity"] == "info"
     )
 
+    pass_count = sum(
+        1 for item in passed_items
+        if item["status"] == "pass"
+    )
+
+    target_met_count = sum(
+        1 for item in passed_items
+        if item["status"] == "at_target"
+    )
+
+    not_applicable_count = len(not_applicable_items)
+    unclassified_count = len(unclassified_items)
+
     if error_count:
         headline = (
             f"发现 {error_count} 项确定问题，"
@@ -855,8 +942,15 @@ def _build_video_issue_report(
 
     elif warning_count:
         headline = (
-            f"未发现确定违规项，"
+            "未发现确定违规项，"
             f"但有 {warning_count} 项需要复核。"
+        )
+
+    elif unclassified_count:
+        headline = (
+            "当前没有发现确定违规项，"
+            f"但有 {unclassified_count} 项检查状态无法归类，"
+            "需要进一步核实。"
         )
 
     else:
@@ -865,6 +959,16 @@ def _build_video_issue_report(
     if info_count:
         headline += f"另有 {info_count} 项参考信息。"
 
+    if pass_count or target_met_count:
+        headline += (
+            f"已通过 {pass_count} 项，"
+            f"达到时长目标 {target_met_count} 项。"
+        )
+
+    if not_applicable_count:
+        headline += f"另有 {not_applicable_count} 项不适用。"
+
+    # 保留旧的 total_items 语义，同时增加总检查项数量。
     return {
         "overall_status": compliance_summary.get(
             "overall_status",
@@ -875,9 +979,17 @@ def _build_video_issue_report(
             "error_count": error_count,
             "warning_count": warning_count,
             "info_count": info_count,
+            "pass_count": pass_count,
+            "target_met_count": target_met_count,
+            "not_applicable_count": not_applicable_count,
+            "unclassified_count": unclassified_count,
             "total_items": len(report_items),
+            "total_check_count": len(checks),
         },
         "items": report_items,
+        "passed_items": passed_items,
+        "not_applicable_items": not_applicable_items,
+        "unclassified_items": unclassified_items,
     }
 
 
