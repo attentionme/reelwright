@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 import subprocess
 from fractions import Fraction
@@ -368,6 +369,291 @@ def get_video_info(video_path: str) -> str:
 # 5. 普通 Python 函数：执行视频规范检查
 # ============================================================
 
+
+def _analyze_audio_activity(video_path: str) -> str:
+    """
+    使用 FFmpeg silencedetect 分析视频中的音频活动/静音结构。
+
+    注意：
+    - 本函数只分析音频活动情况。
+    - 不判断音频是否为对白。
+    - 不判断音频是否为背景音乐。
+    - 不判断音频内容类型。
+    """
+
+    ffmpeg_path = shutil.which("ffmpeg")
+
+    if not ffmpeg_path:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "未找到 ffmpeg，请确认 FFmpeg 已安装并已加入 PATH。",
+            },
+            ensure_ascii=False,
+        )
+
+    path = Path(video_path)
+
+    if not path.exists():
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"视频文件不存在：{video_path}",
+            },
+            ensure_ascii=False,
+        )
+
+    if not path.is_file():
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"指定路径不是文件：{video_path}",
+            },
+            ensure_ascii=False,
+        )
+
+    # ----------------------------------------------------
+    # 1. 先通过 ffprobe 获取媒体总时长
+    # ----------------------------------------------------
+    try:
+        probe_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "ffprobe 获取视频时长超时。",
+            },
+            ensure_ascii=False,
+        )
+    except OSError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"启动 ffprobe 失败：{exc}",
+            },
+            ensure_ascii=False,
+        )
+
+    if probe_result.returncode != 0:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "ffprobe 无法读取视频时长。"
+                    f" stderr: {probe_result.stderr.strip()}"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    try:
+        duration_seconds = float(probe_result.stdout.strip())
+    except ValueError:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "ffprobe 返回的时长无法解析："
+                    f"{probe_result.stdout.strip()}"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    # ----------------------------------------------------
+    # 2. 使用 FFmpeg silencedetect 分析静音区间
+    # ----------------------------------------------------
+    try:
+        ffmpeg_result = subprocess.run(
+            [
+                ffmpeg_path,
+                "-hide_banner",
+                "-i",
+                str(path),
+                "-af",
+                "silencedetect=noise=-35dB:d=0.3",
+                "-f",
+                "null",
+                "NUL",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps(
+            {
+                "success": False,
+                "error": "FFmpeg 音频分析超时。",
+            },
+            ensure_ascii=False,
+        )
+    except OSError as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"启动 FFmpeg 失败：{exc}",
+            },
+            ensure_ascii=False,
+        )
+
+    # silencedetect 的分析结果输出在 stderr。
+    ffmpeg_output = ffmpeg_result.stderr
+
+    if ffmpeg_result.returncode != 0:
+        return json.dumps(
+            {
+                "success": False,
+                "error": (
+                    "FFmpeg 音频分析失败。"
+                    f" stderr: {ffmpeg_output.strip()}"
+                ),
+            },
+            ensure_ascii=False,
+        )
+
+    # ----------------------------------------------------
+    # 3. 解析 silence_start / silence_end
+    # ----------------------------------------------------
+    silence_start_pattern = re.compile(
+        r"silence_start:\s*([0-9.]+)"
+    )
+    silence_end_pattern = re.compile(
+        r"silence_end:\s*([0-9.]+)"
+        r"\s*\|\s*silence_duration:\s*([0-9.]+)"
+    )
+
+    silence_intervals = []
+    current_silence_start = None
+
+    for line in ffmpeg_output.splitlines():
+        start_match = silence_start_pattern.search(line)
+
+        if start_match:
+            current_silence_start = float(start_match.group(1))
+            continue
+
+        end_match = silence_end_pattern.search(line)
+
+        if end_match and current_silence_start is not None:
+            silence_end = float(end_match.group(1))
+            silence_duration = float(end_match.group(2))
+
+            silence_intervals.append(
+                {
+                    "start_seconds": current_silence_start,
+                    "end_seconds": silence_end,
+                    "duration_seconds": silence_duration,
+                }
+            )
+
+            current_silence_start = None
+
+    # ----------------------------------------------------
+    # 4. 处理视频结束时仍处于静音状态的情况
+    # ----------------------------------------------------
+    if current_silence_start is not None:
+        silence_end = duration_seconds
+        silence_duration = max(
+            0.0,
+            silence_end - current_silence_start,
+        )
+
+        silence_intervals.append(
+            {
+                "start_seconds": current_silence_start,
+                "end_seconds": silence_end,
+                "duration_seconds": silence_duration,
+            }
+        )
+
+    # ----------------------------------------------------
+    # 5. 计算音频活动情况
+    # ----------------------------------------------------
+    silence_duration_seconds = sum(
+        item["duration_seconds"]
+        for item in silence_intervals
+    )
+
+    silence_duration_seconds = min(
+        silence_duration_seconds,
+        duration_seconds,
+    )
+
+    active_duration_seconds = max(
+        0.0,
+        duration_seconds - silence_duration_seconds,
+    )
+
+    if duration_seconds > 0:
+        activity_ratio = (
+            active_duration_seconds / duration_seconds
+        )
+    else:
+        activity_ratio = 0.0
+
+    return json.dumps(
+        {
+            "success": True,
+            "file_name": path.name,
+            "file_path": str(path),
+            "duration_seconds": round(
+                duration_seconds,
+                3,
+            ),
+            "silence_count": len(silence_intervals),
+            "silence_duration_seconds": round(
+                silence_duration_seconds,
+                3,
+            ),
+            "active_duration_seconds": round(
+                active_duration_seconds,
+                3,
+            ),
+            "activity_ratio": round(
+                activity_ratio,
+                4,
+            ),
+            "silence_intervals": silence_intervals,
+            "analysis_method": {
+                "tool": "ffmpeg",
+                "filter": "silencedetect",
+                "noise_threshold": "-35dB",
+                "minimum_silence_duration_seconds": 0.3,
+            },
+            "limitations": [
+                "无法判断音频是否为人物对白。",
+                "无法判断音频是否为背景音乐。",
+                "无法判断音频是否为对白与背景音乐的混合。",
+                "activity_ratio 仅表示音频活动比例，不代表人声比例或 BGM 概率。",
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+
+
 def _check_video_requirements(
     video_path: str,
     video_scope: str,
@@ -692,6 +978,69 @@ def _check_video_requirements(
             "has_subtitle_stream",
             subtitle_stream_count > 0,
         )
+
+        # ----------------------------------------------------
+        # 9.0 音频活动分析
+        # ----------------------------------------------------
+
+        audio_activity_raw = _analyze_audio_activity(
+            video_path
+        )
+
+        try:
+            audio_activity = json.loads(
+                audio_activity_raw
+            )
+        except json.JSONDecodeError:
+            audio_activity = {
+                "success": False,
+                "error": (
+                    "音频活动分析返回的数据无法解析。"
+                ),
+            }
+
+        if audio_activity.get("success"):
+            audio_activity_status = "informational"
+
+            audio_activity_message = (
+                f"检测到视频音频活动比例为 "
+                f"{audio_activity.get('activity_ratio', 0):.2%}，"
+                f"静音区间 {audio_activity.get('silence_count', 0)} 个，"
+                f"有声音时长 "
+                f"{audio_activity.get('active_duration_seconds', 0)} 秒。"
+                "该结果仅用于描述音频活动情况，"
+                "不能用于判断是否存在 BGM 或人物对白。"
+            )
+        else:
+            audio_activity_status = "not_checked"
+
+            audio_activity_message = (
+                "音频活动分析未能完成："
+                f"{audio_activity.get('error', '未知错误')}"
+            )
+
+        checks["audio_activity"] = {
+            "status": audio_activity_status,
+            "duration_seconds": audio_activity.get(
+                "duration_seconds"
+            ),
+            "silence_count": audio_activity.get(
+                "silence_count"
+            ),
+            "silence_duration_seconds": audio_activity.get(
+                "silence_duration_seconds"
+            ),
+            "active_duration_seconds": audio_activity.get(
+                "active_duration_seconds"
+            ),
+            "activity_ratio": audio_activity.get(
+                "activity_ratio"
+            ),
+            "analysis_method": audio_activity.get(
+                "analysis_method"
+            ),
+            "message": audio_activity_message,
+        }
 
         # ----------------------------------------------------
         # 9.1 检查独立字幕轨道
