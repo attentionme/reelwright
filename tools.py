@@ -653,6 +653,233 @@ def _analyze_audio_activity(video_path: str) -> str:
 
 
 
+def _build_video_issue_report(
+    checks: dict,
+    compliance_summary: dict,
+    video_scope: str,
+) -> dict:
+    """
+    根据已有的视频检测结果生成结构化问题报告。
+
+    本函数只负责整理和解释检测结果，不执行媒体分析。
+    """
+
+    report_items = []
+
+    title_by_check = {
+        "aspect_ratio": "画幅不符合项目要求",
+        "duration": "视频时长需要处理或复核",
+        "fps": "帧率标准尚未配置",
+        "subtitle_stream": "独立字幕轨道需要检查",
+        "background_music": "背景音乐尚未确认",
+        "burned_in_subtitles": "画面内嵌字幕尚未确认",
+        "dialogue_content": "人物对白需要检查",
+        "audio_activity": "音频活动分析结果",
+    }
+
+    # 为不同类型的问题提供明确的处理建议。
+    recommendation_by_check = {
+        "aspect_ratio": (
+            "优先在生成阶段设置正确的画幅。"
+            "如果调整现有视频，请在剪辑软件中设置为项目要求的画幅，"
+            "重新检查构图，避免直接裁切造成主体出框。"
+        ),
+        "fps": (
+            "根据实际制作要求，在 project.json 中配置目标帧率，"
+            "并在后续检测逻辑中接入该配置后再判断是否合格。"
+        ),
+        "subtitle_stream": (
+            "如果独立字幕轨道不被允许，"
+            "请在剪辑或封装软件中移除该轨道，再重新导出视频。"
+        ),
+        "background_music": (
+            "请人工试听视频音轨，确认其中是人物对白、背景音乐，"
+            "还是两者混合。当前检测结果不足以判断是否存在背景音乐。"
+        ),
+        "burned_in_subtitles": (
+            "请人工检查视频画面中的文字。"
+            "如果存在不允许的内嵌字幕，应移除相关文字后重新导出。"
+        ),
+        "dialogue_content": (
+            "请人工试听音轨，或在后续接入语音检测能力后再进行判断。"
+        ),
+        "audio_activity": (
+            "该结果只反映音频活动与静音的分布，"
+            "不能把音频活动比例当作人声比例或背景音乐概率。"
+        ),
+    }
+
+    for check_name, detail in checks.items():
+        status = detail.get("status")
+
+        # 合格项和不需要检查的项目，不列入问题报告。
+        if status in {"pass", "not_applicable", "at_target"}:
+            continue
+
+        # 把原始检测状态映射成便于用户理解的级别。
+        if status == "fail":
+            severity = "error"
+
+        elif status in {
+            "not_checked",
+            "not_configured",
+            "below_target",
+            "above_target",
+        }:
+            severity = "warning"
+
+        elif status == "informational":
+            severity = "info"
+
+        else:
+            # 不认识的状态不直接当作问题，避免误报。
+            continue
+
+        title = title_by_check.get(
+            check_name,
+            f"{check_name} 检查结果",
+        )
+
+        reason = detail.get("message", "暂无详细说明。")
+
+        recommendation = recommendation_by_check.get(
+            check_name,
+            "请根据检测结果和项目规范进一步检查。",
+        )
+
+        # ------------------------------------------------
+        # 画幅问题：说明项目要求与实际分辨率。
+        # ------------------------------------------------
+        if check_name == "aspect_ratio":
+            expected = detail.get("expected", "未配置")
+            width = detail.get("width")
+            height = detail.get("height")
+
+            reason = (
+                f"项目要求画幅为 {expected}，"
+                f"当前视频分辨率为 {width}×{height}。"
+            )
+
+        # ------------------------------------------------
+        # 时长问题：区分单镜头超限与整集时长偏差。
+        # ------------------------------------------------
+        elif check_name == "duration":
+
+            actual = detail.get("actual_seconds")
+
+            if video_scope == "shot" and status == "fail":
+                maximum = detail.get("maximum_seconds")
+
+                difference = max(
+                    0.0,
+                    float(detail.get("difference_seconds", 0)),
+                )
+
+                title = "单镜头时长超过限制"
+
+                reason = (
+                    f"当前镜头时长为 {actual} 秒，"
+                    f"最大允许时长为 {maximum} 秒，"
+                    f"超出 {difference:.3f} 秒。"
+                )
+
+                recommendation = (
+                    f"将该镜头至少剪短 {difference:.3f} 秒，"
+                    f"使最终时长不超过 {maximum} 秒。"
+                    "建议留出少量余量，避免导出时长误差造成再次超限。"
+                )
+
+            elif video_scope == "episode":
+                target = detail.get("target_seconds")
+
+                title = "整集时长与目标存在偏差"
+
+                reason = (
+                    f"整集实际时长为 {actual} 秒，"
+                    f"项目目标时长为 {target} 秒。"
+                    f"{detail.get('message', '')}"
+                )
+
+                recommendation = (
+                    "请根据整集节奏和制作目标复核时长。"
+                    "当前配置没有规定允许误差，因此该偏差需要复核，"
+                    "不能仅凭偏差直接判定违规。"
+                )
+
+        # ------------------------------------------------
+        # 未配置检测标准：记录实际值，但不判定合格性。
+        # ------------------------------------------------
+        elif check_name == "fps":
+            actual_fps = detail.get("actual")
+
+            reason = (
+                f"当前视频帧率为 {actual_fps} fps，"
+                "但项目配置中没有目标帧率。"
+            )
+
+        # 每条报告保留原始状态、原因与可执行建议。
+        report_items.append({
+            "check": check_name,
+            "severity": severity,
+            "status": status,
+            "title": title,
+            "reason": reason,
+            "recommendation": recommendation,
+            "original_message": detail.get("message", ""),
+        })
+
+    # ----------------------------------------------------
+    # 汇总各级别的问题数量。
+    # ----------------------------------------------------
+
+    error_count = sum(
+        1 for item in report_items
+        if item["severity"] == "error"
+    )
+
+    warning_count = sum(
+        1 for item in report_items
+        if item["severity"] == "warning"
+    )
+
+    info_count = sum(
+        1 for item in report_items
+        if item["severity"] == "info"
+    )
+
+    if error_count:
+        headline = (
+            f"发现 {error_count} 项确定问题，"
+            f"{warning_count} 项需要复核。"
+        )
+
+    elif warning_count:
+        headline = (
+            f"未发现确定违规项，"
+            f"但有 {warning_count} 项需要复核。"
+        )
+
+    else:
+        headline = "未发现需要处理的违规项。"
+
+    if info_count:
+        headline += f"另有 {info_count} 项参考信息。"
+
+    return {
+        "overall_status": compliance_summary.get(
+            "overall_status",
+            "needs_review",
+        ),
+        "headline": headline,
+        "counts": {
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "info_count": info_count,
+            "total_items": len(report_items),
+        },
+        "items": report_items,
+    }
+
 
 def _check_video_requirements(
     video_path: str,
@@ -1297,6 +1524,13 @@ def _check_video_requirements(
             "needs_review": review_items,
         }
 
+        # 根据已有的检测结果生成结构化问题报告。
+        issue_report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope=video_scope,
+        )
+
         # ----------------------------------------------------
         # 9. 整理最终检查结果
         # ----------------------------------------------------
@@ -1307,6 +1541,7 @@ def _check_video_requirements(
             "video_scope": video_scope,
             "video_info": video_info,
             "compliance_summary": compliance_summary,
+            "issue_report": issue_report,
             "project_requirements": {
                 "aspect_ratio": expected_aspect_ratio,
                 "target_duration_seconds": (
