@@ -145,6 +145,14 @@ def build_agent(api_key: str):
     "整集时长按精确匹配处理。"
     "不要在没有目标帧率时声称 fps 检查通过或失败。"
 
+    "项目中的 video_codec 和 audio_codec 分别表示目标视频编码和目标音频编码。"
+    "这两个字段同样是可选配置："
+    "如果 project.json 中没有 video_codec 或 audio_codec，"
+    "对应的编码检查会返回 not_configured，而不是 pass 或 fail。"
+    "如果项目配置了 audio_codec，但视频没有音频流，"
+    "音频编码检查会返回 not_applicable，而不是 fail。"
+    "不要在没有配置目标编码时声称编码检查通过或失败。"
+    
     "当前工具无法检查字幕、音轨内容、"
     "画面中的角色风格、构图或每个镜头的实际数量。"
     "不要声称已经完成这些检查。"
