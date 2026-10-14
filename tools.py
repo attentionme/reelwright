@@ -1020,6 +1020,115 @@ def _build_video_issue_report(
         "unclassified_items": unclassified_items,
     }
 
+def _build_duration_check(
+    actual_duration: float,
+    video_scope: str,
+    target_duration: float,
+    max_shot_duration: float,
+) -> dict:
+    """
+    根据视频范围生成时长检查结果。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        actual_duration:
+            视频实际时长（秒）。
+        video_scope:
+            "episode" 表示整集，其他视为单镜头。
+        target_duration:
+            整集目标时长（秒）。
+        max_shot_duration:
+            单镜头最大时长（秒）。
+
+    Returns:
+        checks["duration"] 的字典结构。
+    """
+
+    if video_scope == "episode":
+
+        # 整集只与目标时长比较
+        duration_difference = round(
+            actual_duration - target_duration,
+            3,
+        )
+
+        if duration_difference == 0:
+            duration_status = "at_target"
+
+            duration_message = (
+                f"整集实际时长 {actual_duration} 秒，"
+                f"与目标时长 {target_duration} 秒一致。"
+            )
+
+        elif duration_difference < 0:
+            duration_status = "below_target"
+
+            duration_message = (
+                f"整集实际时长 {actual_duration} 秒，"
+                f"比目标时长 {target_duration} 秒"
+                f"少 {abs(duration_difference)} 秒。"
+            )
+
+        else:
+            duration_status = "above_target"
+
+            duration_message = (
+                f"整集实际时长 {actual_duration} 秒，"
+                f"比目标时长 {target_duration} 秒"
+                f"多 {duration_difference} 秒。"
+            )
+
+        return {
+            "scope": "episode",
+            "status": duration_status,
+            "actual_seconds": actual_duration,
+            "target_seconds": target_duration,
+            "difference_seconds": duration_difference,
+            "message": duration_message,
+            "note": (
+                "当前项目只规定整集目标时长，"
+                "没有规定允许误差，因此只报告差异，"
+                "不自动判定整集时长是否合格。"
+            ),
+        }
+
+    # 单镜头与最大时长比较
+    duration_difference = round(
+        actual_duration - max_shot_duration,
+        3,
+    )
+
+    duration_pass = (
+        actual_duration <= max_shot_duration
+    )
+
+    return {
+        "scope": "shot",
+        "status": (
+            "pass"
+            if duration_pass
+            else "fail"
+        ),
+        "actual_seconds": actual_duration,
+        "maximum_seconds": max_shot_duration,
+        "difference_seconds": duration_difference,
+        "message": (
+            f"单镜头时长 {actual_duration} 秒，"
+            f"没有超过最大时长 "
+            f"{max_shot_duration} 秒。"
+            if duration_pass
+            else (
+                f"单镜头时长 {actual_duration} 秒，"
+                f"超过最大时长 "
+                f"{max_shot_duration} 秒，"
+                f"超出 {duration_difference} 秒。"
+            )
+        ),
+    }
+
+
+
 def _build_compliance_summary(checks: dict) -> dict:
     """
     根据 checks 汇总整体合规状态。
@@ -1274,89 +1383,12 @@ def _check_video_requirements(
         # 7. 根据视频范围检查时长
         # ----------------------------------------------------
 
-        if video_scope == "episode":
-
-            # 整集只与目标时长比较
-            duration_difference = round(
-                actual_duration - target_duration,
-                3,
-            )
-
-            if duration_difference == 0:
-                duration_status = "at_target"
-
-                duration_message = (
-                    f"整集实际时长 {actual_duration} 秒，"
-                    f"与目标时长 {target_duration} 秒一致。"
-                )
-
-            elif duration_difference < 0:
-                duration_status = "below_target"
-
-                duration_message = (
-                    f"整集实际时长 {actual_duration} 秒，"
-                    f"比目标时长 {target_duration} 秒"
-                    f"少 {abs(duration_difference)} 秒。"
-                )
-
-            else:
-                duration_status = "above_target"
-
-                duration_message = (
-                    f"整集实际时长 {actual_duration} 秒，"
-                    f"比目标时长 {target_duration} 秒"
-                    f"多 {duration_difference} 秒。"
-                )
-
-            checks["duration"] = {
-                "scope": "episode",
-                "status": duration_status,
-                "actual_seconds": actual_duration,
-                "target_seconds": target_duration,
-                "difference_seconds": duration_difference,
-                "message": duration_message,
-                "note": (
-                    "当前项目只规定整集目标时长，"
-                    "没有规定允许误差，因此只报告差异，"
-                    "不自动判定整集时长是否合格。"
-                ),
-            }
-
-        else:
-
-            # 单镜头与最大时长比较
-            duration_difference = round(
-                actual_duration - max_shot_duration,
-                3,
-            )
-
-            duration_pass = (
-                actual_duration <= max_shot_duration
-            )
-
-            checks["duration"] = {
-                "scope": "shot",
-                "status": (
-                    "pass"
-                    if duration_pass
-                    else "fail"
-                ),
-                "actual_seconds": actual_duration,
-                "maximum_seconds": max_shot_duration,
-                "difference_seconds": duration_difference,
-                "message": (
-                    f"单镜头时长 {actual_duration} 秒，"
-                    f"没有超过最大时长 "
-                    f"{max_shot_duration} 秒。"
-                    if duration_pass
-                    else (
-                        f"单镜头时长 {actual_duration} 秒，"
-                        f"超过最大时长 "
-                        f"{max_shot_duration} 秒，"
-                        f"超出 {duration_difference} 秒。"
-                    )
-                ),
-            }
+        checks["duration"] = _build_duration_check(
+            actual_duration=actual_duration,
+            video_scope=video_scope,
+            target_duration=target_duration,
+            max_shot_duration=max_shot_duration,
+        )
 
         # ----------------------------------------------------
         # 8. 记录帧率
