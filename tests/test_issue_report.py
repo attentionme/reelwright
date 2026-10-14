@@ -312,6 +312,82 @@ class TestIssueReportClassification(unittest.TestCase):
             "没有规定允许误差",
             item["recommendation"],
         )
-        
+
+    def test_fps_fail_recommendation_asks_adjustment(self):
+        """fps fail（已配置但实际不符）：建议应指导调整帧率，不是配置。"""
+
+        checks = {
+            "fps": {
+                "status": "fail",
+                "message": "视频帧率 30.0 fps 与项目要求 24 fps 不符",
+                "actual": 30.0,
+                "target": 24,
+            },
+        }
+        compliance_summary = {"overall_status": "fail"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+
+        item = report["items"][0]
+
+        self.assertEqual(item["severity"], "error")
+        self.assertIn("24", item["recommendation"])
+        self.assertNotIn(
+            "在 project.json 中配置",
+            item["recommendation"],
+        )
+
+    def test_fps_not_configured_recommendation_asks_config(self):
+        """fps not_configured：建议应指导去配置 target_fps。"""
+
+        checks = {
+            "fps": {
+                "status": "not_configured",
+                "message": "项目配置中没有规定目标帧率",
+                "actual": 24.0,
+                "target": None,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertIn("target_fps", item["recommendation"])
+
+    def test_fps_not_checked_recommendation_asks_recheck(self):
+        """fps not_checked（目标已配置但视频无 fps 信息）：建议重新导出。"""
+
+        checks = {
+            "fps": {
+                "status": "not_checked",
+                "message": "视频没有可用的帧率信息",
+                "actual": None,
+                "target": 24,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertIn("重新导出", item["recommendation"])        
+
 if __name__ == "__main__":
     unittest.main()

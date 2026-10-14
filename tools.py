@@ -948,8 +948,24 @@ def _build_video_issue_report(
                     f"当前视频帧率为 {actual_fps} fps，"
                     "但项目配置中没有目标帧率。"
                 )
+                recommendation = (
+                    "根据实际制作要求，在 project.json 中配置 "
+                    "target_fps，然后再重新检查。"
+                )
+            elif status == "not_checked":
+                reason = detail.get("message", "")
+                recommendation = (
+                    "当前视频没有可用的帧率信息，"
+                    "请确认视频文件包含有效的视频流，"
+                    "必要时重新导出后再检查。"
+                )
             else:
                 reason = detail.get("message", "")
+                recommendation = (
+                    f"当前视频帧率与项目要求不一致，"
+                    f"请在生成或导出阶段调整为 "
+                    f"{target_fps} fps 后重新导出。"
+                )
 
         # 每条报告保留原始状态、原因与可执行建议。
         report_items.append({
