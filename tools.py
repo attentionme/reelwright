@@ -1020,6 +1020,99 @@ def _build_video_issue_report(
         "unclassified_items": unclassified_items,
     }
 
+def _build_compliance_summary(checks: dict) -> dict:
+    """
+    根据 checks 汇总整体合规状态。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        checks:
+            检查项字典，每项至少包含 "status" 字段。
+
+    Returns:
+        {
+            "overall_status": "fail" | "needs_review" | "pass",
+            "status_counts": {...},
+            "failures": [...],
+            "needs_review": [...],
+        }
+    """
+
+    status_counts = {
+        "pass": 0,
+        "fail": 0,
+        "not_checked": 0,
+        "not_configured": 0,
+        "not_applicable": 0,
+        "informational": 0,
+    }
+
+    failures = []
+    review_items = []
+
+    # 整集时长目前只有目标值，没有允许误差。
+    # 因此低于或高于目标时，只能要求复核，不能直接判为违规。
+    informational_statuses = {
+        "at_target",
+        "below_target",
+        "above_target",
+    }
+
+    for check_name, check_detail in checks.items():
+
+        status = check_detail.get("status")
+
+        if status in status_counts:
+            status_counts[status] += 1
+
+        elif status in informational_statuses:
+            status_counts["informational"] += 1
+
+        # 已经发现明确不合格的项目
+        if status == "fail":
+            failures.append({
+                "check": check_name,
+                "message": check_detail.get("message", ""),
+            })
+
+        # 无法检测或缺少检查标准的项目
+        elif status in {
+            "not_checked",
+            "not_configured",
+        }:
+            review_items.append({
+                "check": check_name,
+                "status": status,
+                "message": check_detail.get("message", ""),
+            })
+
+        # 整集时长偏离目标，但尚无允许误差标准
+        elif status in {
+            "below_target",
+            "above_target",
+        }:
+            review_items.append({
+                "check": check_name,
+                "status": status,
+                "message": check_detail.get("message", ""),
+            })
+
+    if failures:
+        overall_status = "fail"
+
+    elif review_items:
+        overall_status = "needs_review"
+
+    else:
+        overall_status = "pass"
+
+    return {
+        "overall_status": overall_status,
+        "status_counts": status_counts,
+        "failures": failures,
+        "needs_review": review_items,
+    }
 
 def _check_video_requirements(
     video_path: str,
@@ -1582,87 +1675,7 @@ def _check_video_requirements(
         # 10. 汇总所有检查项的合规状态
         # ----------------------------------------------------
 
-        status_counts = {
-            "pass": 0,
-            "fail": 0,
-            "not_checked": 0,
-            "not_configured": 0,
-            "not_applicable": 0,
-            "informational": 0,
-        }
-
-        failures = []
-        review_items = []
-
-        # 整集时长目前只有目标值，没有允许误差。
-        # 因此低于或高于目标时，只能要求复核，不能直接判为违规。
-        informational_statuses = {
-            "at_target",
-            "below_target",
-            "above_target",
-        }
-
-        for check_name, check_detail in checks.items():
-
-            status = check_detail.get("status")
-
-            if status in status_counts:
-                status_counts[status] += 1
-
-            elif status in informational_statuses:
-                status_counts["informational"] += 1
-
-            # 已经发现明确不合格的项目
-            if status == "fail":
-                failures.append({
-                    "check": check_name,
-                    "message": check_detail.get(
-                        "message", ""
-                    ),
-                })
-
-            # 无法检测或缺少检查标准的项目
-            elif status in {
-                "not_checked",
-                "not_configured",
-            }:
-                review_items.append({
-                    "check": check_name,
-                    "status": status,
-                    "message": check_detail.get(
-                        "message", ""
-                    ),
-                })
-
-            # 整集时长偏离目标，但尚无允许误差标准
-            elif status in {
-                "below_target",
-                "above_target",
-            }:
-                review_items.append({
-                    "check": check_name,
-                    "status": status,
-                    "message": check_detail.get(
-                        "message", ""
-                    ),
-                })
-
-        # 确定整体合规状态
-        if failures:
-            overall_status = "fail"
-
-        elif review_items:
-            overall_status = "needs_review"
-
-        else:
-            overall_status = "pass"
-
-        compliance_summary = {
-            "overall_status": overall_status,
-            "status_counts": status_counts,
-            "failures": failures,
-            "needs_review": review_items,
-        }
+        compliance_summary = _build_compliance_summary(checks)
 
         # 根据已有的检测结果生成结构化问题报告。
         issue_report = _build_video_issue_report(
