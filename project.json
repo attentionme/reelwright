@@ -2,6 +2,7 @@
   "project_name": "动画制作助手",
   "aspect_ratio": "9:16",
   "target_duration_seconds": 45,
+  "target_duration_tolerance_seconds": 2,
   "max_shot_duration_seconds": 12,
   "target_fps": 24,
   "character_style": "二维角色叠加写实背景",

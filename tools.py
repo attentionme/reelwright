@@ -1119,6 +1119,7 @@ def _build_duration_check(
     video_scope: str,
     target_duration: float,
     max_shot_duration: float,
+    tolerance_seconds: float = 0.0,
 ) -> dict:
     """
     根据视频范围生成时长检查结果。
@@ -1134,6 +1135,9 @@ def _build_duration_check(
             整集目标时长（秒）。
         max_shot_duration:
             单镜头最大时长（秒）。
+        tolerance_seconds:
+            整集目标时长的允许误差（秒）。默认 0 表示要求精确匹配。
+            仅影响 episode 分支；shot 分支不使用该参数。
 
     Returns:
         checks["duration"] 的字典结构。
@@ -1147,13 +1151,27 @@ def _build_duration_check(
             3,
         )
 
-        if duration_difference == 0:
+        abs_difference = abs(duration_difference)
+
+        if abs_difference <= tolerance_seconds:
             duration_status = "at_target"
 
-            duration_message = (
-                f"整集实际时长 {actual_duration} 秒，"
-                f"与目标时长 {target_duration} 秒一致。"
-            )
+            if duration_difference == 0:
+                duration_message = (
+                    f"整集实际时长 {actual_duration} 秒，"
+                    f"与目标时长 {target_duration} 秒一致。"
+                )
+            else:
+                direction = (
+                    "少于" if duration_difference < 0 else "多于"
+                )
+
+                duration_message = (
+                    f"整集实际时长 {actual_duration} 秒，"
+                    f"{direction}目标时长 {target_duration} 秒 "
+                    f"{abs_difference} 秒，"
+                    f"在允许误差 {tolerance_seconds} 秒范围内。"
+                )
 
         elif duration_difference < 0:
             duration_status = "below_target"
@@ -1161,7 +1179,8 @@ def _build_duration_check(
             duration_message = (
                 f"整集实际时长 {actual_duration} 秒，"
                 f"比目标时长 {target_duration} 秒"
-                f"少 {abs(duration_difference)} 秒。"
+                f"少 {abs_difference} 秒，"
+                f"超出允许误差 {tolerance_seconds} 秒。"
             )
 
         else:
@@ -1170,7 +1189,21 @@ def _build_duration_check(
             duration_message = (
                 f"整集实际时长 {actual_duration} 秒，"
                 f"比目标时长 {target_duration} 秒"
-                f"多 {duration_difference} 秒。"
+                f"多 {abs_difference} 秒，"
+                f"超出允许误差 {tolerance_seconds} 秒。"
+            )
+
+        if tolerance_seconds > 0:
+            note = (
+                f"当前允许误差为 {tolerance_seconds} 秒，"
+                "超出误差范围时仍需要复核，"
+                "不会自动判为违规。"
+            )
+        else:
+            note = (
+                "当前项目只规定整集目标时长，"
+                "没有规定允许误差，因此只报告差异，"
+                "不自动判定整集时长是否合格。"
             )
 
         return {
@@ -1179,12 +1212,9 @@ def _build_duration_check(
             "actual_seconds": actual_duration,
             "target_seconds": target_duration,
             "difference_seconds": duration_difference,
+            "tolerance_seconds": tolerance_seconds,
             "message": duration_message,
-            "note": (
-                "当前项目只规定整集目标时长，"
-                "没有规定允许误差，因此只报告差异，"
-                "不自动判定整集时长是否合格。"
-            ),
+            "note": note,
         }
 
     # 单镜头与最大时长比较
@@ -1220,7 +1250,6 @@ def _build_duration_check(
             )
         ),
     }
-
 
 
 def _build_compliance_summary(checks: dict) -> dict:
@@ -1477,11 +1506,19 @@ def _check_video_requirements(
         # 7. 根据视频范围检查时长
         # ----------------------------------------------------
 
+        duration_tolerance = float(
+            project.get(
+                "target_duration_tolerance_seconds",
+                0,
+            )
+        )
+
         checks["duration"] = _build_duration_check(
             actual_duration=actual_duration,
             video_scope=video_scope,
             target_duration=target_duration,
             max_shot_duration=max_shot_duration,
+            tolerance_seconds=duration_tolerance,
         )
 
         # ----------------------------------------------------
