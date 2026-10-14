@@ -919,11 +919,22 @@ def _build_video_issue_report(
                     f"{detail.get('message', '')}"
                 )
 
-                recommendation = (
-                    "请根据整集节奏和制作目标复核时长。"
-                    "当前配置没有规定允许误差，因此该偏差需要复核，"
-                    "不能仅凭偏差直接判定违规。"
+                tolerance = float(
+                    detail.get("tolerance_seconds", 0)
                 )
+
+                if tolerance > 0:
+                    recommendation = (
+                        f"当前项目为整集时长配置了 {tolerance} 秒允许误差。"
+                        "超出该误差范围的偏差需要复核，"
+                        "可以根据整集节奏和制作目标调整。"
+                    )
+                else:
+                    recommendation = (
+                        "请根据整集节奏和制作目标复核时长。"
+                        "当前配置没有规定允许误差，因此该偏差需要复核，"
+                        "不能仅凭偏差直接判定违规。"
+                    )
 
         # ------------------------------------------------
         # 帧率：区分已配置目标与未配置目标两种情况。

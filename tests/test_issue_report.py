@@ -253,6 +253,65 @@ class TestIssueReportClassification(unittest.TestCase):
         self.assertIn("12.25", item["reason"])
         self.assertIn("0.250", item["reason"])
 
+    def test_episode_below_target_with_tolerance_recommendation(self):
+        """episode 超出容差：recommendation 应提到已配置的允许误差。"""
 
+        checks = {
+            "duration": {
+                "status": "below_target",
+                "message": "整集偏短",
+                "actual_seconds": 40.0,
+                "target_seconds": 45,
+                "difference_seconds": -5.0,
+                "tolerance_seconds": 2,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="episode",
+        )
+
+        self.assertEqual(len(report["items"]), 1)
+
+        item = report["items"][0]
+
+        self.assertEqual(item["check"], "duration")
+        self.assertIn("2", item["recommendation"])
+        self.assertIn("允许误差", item["recommendation"])
+        self.assertNotIn(
+            "没有规定允许误差",
+            item["recommendation"],
+        )
+
+    def test_episode_below_target_without_tolerance_keeps_legacy_text(self):
+        """episode 无 tolerance 字段：recommendation 保持旧文案。"""
+
+        checks = {
+            "duration": {
+                "status": "below_target",
+                "message": "整集偏短",
+                "actual_seconds": 40.0,
+                "target_seconds": 45,
+                "difference_seconds": -5.0,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="episode",
+        )
+
+        item = report["items"][0]
+
+        self.assertIn(
+            "没有规定允许误差",
+            item["recommendation"],
+        )
+        
 if __name__ == "__main__":
     unittest.main()
