@@ -65,6 +65,106 @@ def get_project_info() -> str:
 # 3. 普通 Python 函数：读取视频元数据
 # ============================================================
 
+def _normalize_ffprobe_streams(raw_streams: list) -> list:
+    """
+    把 ffprobe 返回的媒体流列表归一化为统一结构。
+
+    纯函数：不调用 ffprobe，不访问文件，不访问网络。
+
+    Args:
+        raw_streams:
+            ffprobe JSON 中的 streams 列表。
+
+    Returns:
+        归一化后的媒体流列表，每项至少包含 index、codec_type、codec_name。
+        视频流若含 width/height 则写入，若含 r_frame_rate 则写入 fps。
+        音频流若含 sample_rate/channels 则写入。
+        含 tags 时写入 language / title。
+    """
+
+    normalized_streams = []
+
+    for stream in raw_streams:
+        codec_type = stream.get(
+            "codec_type",
+            "unknown",
+        )
+
+        stream_info = {
+            "index": stream.get("index"),
+            "codec_type": codec_type,
+            "codec_name": stream.get("codec_name"),
+        }
+
+        # 视频流：记录分辨率与帧率
+        if codec_type == "video":
+
+            if stream.get("width") is not None:
+                stream_info["width"] = int(
+                    stream["width"]
+                )
+
+            if stream.get("height") is not None:
+                stream_info["height"] = int(
+                    stream["height"]
+                )
+
+            raw_fps = stream.get("r_frame_rate")
+
+            try:
+                fps = (
+                    float(Fraction(raw_fps))
+                    if raw_fps
+                    else None
+                )
+            except (
+                ValueError,
+                ZeroDivisionError,
+                TypeError,
+            ):
+                fps = None
+
+            stream_info["fps"] = (
+                round(fps, 3)
+                if fps is not None
+                else None
+            )
+
+        # 音频流：记录采样率与声道数
+        elif codec_type == "audio":
+
+            if stream.get("sample_rate") is not None:
+                try:
+                    stream_info["sample_rate"] = int(
+                        stream["sample_rate"]
+                    )
+                except (TypeError, ValueError):
+                    stream_info["sample_rate"] = (
+                        stream["sample_rate"]
+                    )
+
+            if stream.get("channels") is not None:
+                stream_info["channels"] = int(
+                    stream["channels"]
+                )
+
+        # 字幕流不需要额外解析画面内容。
+        # 这里只确认它是否作为独立媒体流存在。
+
+        # 保留媒体流附带的语言与标题信息
+        tags = stream.get("tags", {})
+
+        if tags.get("language"):
+            stream_info["language"] = tags["language"]
+
+        if tags.get("title"):
+            stream_info["title"] = tags["title"]
+
+        normalized_streams.append(stream_info)
+
+    return normalized_streams
+
+
 
 def _get_video_info(video_path: str) -> str:
     """
@@ -170,85 +270,7 @@ def _get_video_info(video_path: str) -> str:
             )
 
         # 6. 统一整理全部媒体流的数据
-        normalized_streams = []
-
-        for stream in raw_streams:
-            codec_type = stream.get(
-                "codec_type",
-                "unknown",
-            )
-
-            stream_info = {
-                "index": stream.get("index"),
-                "codec_type": codec_type,
-                "codec_name": stream.get("codec_name"),
-            }
-
-            # 视频流：记录分辨率与帧率
-            if codec_type == "video":
-
-                if stream.get("width") is not None:
-                    stream_info["width"] = int(
-                        stream["width"]
-                    )
-
-                if stream.get("height") is not None:
-                    stream_info["height"] = int(
-                        stream["height"]
-                    )
-
-                raw_fps = stream.get("r_frame_rate")
-
-                try:
-                    fps = (
-                        float(Fraction(raw_fps))
-                        if raw_fps
-                        else None
-                    )
-                except (
-                    ValueError,
-                    ZeroDivisionError,
-                    TypeError,
-                ):
-                    fps = None
-
-                stream_info["fps"] = (
-                    round(fps, 3)
-                    if fps is not None
-                    else None
-                )
-
-            # 音频流：记录采样率与声道数
-            elif codec_type == "audio":
-
-                if stream.get("sample_rate") is not None:
-                    try:
-                        stream_info["sample_rate"] = int(
-                            stream["sample_rate"]
-                        )
-                    except (TypeError, ValueError):
-                        stream_info["sample_rate"] = (
-                            stream["sample_rate"]
-                        )
-
-                if stream.get("channels") is not None:
-                    stream_info["channels"] = int(
-                        stream["channels"]
-                    )
-
-            # 字幕流不需要额外解析画面内容。
-            # 这里只确认它是否作为独立媒体流存在。
-
-            # 保留媒体流附带的语言与标题信息
-            tags = stream.get("tags", {})
-
-            if tags.get("language"):
-                stream_info["language"] = tags["language"]
-
-            if tags.get("title"):
-                stream_info["title"] = tags["title"]
-
-            normalized_streams.append(stream_info)
+        normalized_streams = _normalize_ffprobe_streams(raw_streams)
 
         # 7. 找到第一条视频流，保持原有视频信息接口兼容
         video_streams = [
