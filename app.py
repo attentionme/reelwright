@@ -1,4 +1,3 @@
-
 import gradio as gr
 from openai import AsyncOpenAI
 
@@ -72,6 +71,11 @@ def build_agent(api_key: str):
     "先获取视频实际信息；"
     "如果规范检查必须区分视频范围，"
     "向用户询问视频属于整集还是单个镜头。"
+
+    "如果用户在后续对话中补充了视频范围，"
+    "并且之前的对话里已经提供了视频路径，"
+    "应结合对话历史直接执行规范检查，"
+    "不要再次询问视频路径。"
 
     "check_video_requirements 已经负责进行确定性的"
     "画幅和时长检查。"
@@ -161,6 +165,57 @@ def build_agent(api_key: str):
     return agent, client
 
 
+def _extract_history_lines(history) -> list:
+    """
+    从 Gradio 的 history 中提取对话行。
+
+    兼容两种 content 格式：
+    - Gradio 5.x：content 是 list of message blocks，
+      例如 [{"text": "...", "type": "text"}, ...]
+    - 旧格式：content 是 str
+
+    纯函数：不访问网络，不依赖 Gradio 运行时。
+    """
+
+    lines = []
+
+    for item in (history or [])[-8:]:
+        if not isinstance(item, dict):
+            continue
+
+        role = item.get("role")
+        content = item.get("content", "")
+
+        # Gradio 5.x：content 是 message block 列表
+        if isinstance(content, list):
+            text_parts = []
+
+            for block in content:
+                if (
+                    isinstance(block, dict)
+                    and isinstance(block.get("text"), str)
+                ):
+                    text_parts.append(block["text"])
+                elif isinstance(block, str):
+                    text_parts.append(block)
+
+            content = "\n".join(text_parts)
+
+        # content 必须是字符串才继续
+        if not isinstance(content, str):
+            continue
+
+        if not content:
+            continue
+
+        if role == "user":
+            lines.append(f"用户：{content}")
+        elif role == "assistant":
+            lines.append(f"助手：{content}")
+
+    return lines
+
+
 # Gradio 会把用户问题、对话历史和密钥传给这个函数
 async def chat(message, history, api_key):
     if not api_key or not api_key.strip():
@@ -170,19 +225,7 @@ async def chat(message, history, api_key):
 
     try:
         # 将最近的聊天记录整理成上下文
-        history_lines = []
-
-        for item in (history or [])[-8:]:
-            if not isinstance(item, dict):
-                continue
-
-            role = item.get("role")
-            content = item.get("content", "")
-
-            if role == "user" and isinstance(content, str):
-                history_lines.append(f"用户：{content}")
-            elif role == "assistant" and isinstance(content, str):
-                history_lines.append(f"助手：{content}")
+        history_lines = _extract_history_lines(history)
 
         if history_lines:
             prompt = (
