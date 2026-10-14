@@ -723,6 +723,8 @@ def _build_video_issue_report(
         "aspect_ratio": "画幅不符合项目要求",
         "duration": "视频时长需要处理或复核",
         "fps": "帧率标准尚未配置",
+        "video_codec": "视频编码不符合项目要求",
+        "audio_codec": "音频编码不符合项目要求",
         "subtitle_stream": "独立字幕轨道需要检查",
         "background_music": "背景音乐尚未确认",
         "burned_in_subtitles": "画面内嵌字幕尚未确认",
@@ -734,6 +736,8 @@ def _build_video_issue_report(
         "aspect_ratio": "画幅检查通过",
         "duration": "时长检查通过",
         "fps": "帧率检查通过",
+        "video_codec": "视频编码检查通过",
+        "audio_codec": "音频编码检查通过",
         "subtitle_stream": "独立字幕轨道检查通过",
         "background_music": "背景音乐规则检查通过",
         "burned_in_subtitles": "内嵌字幕规则检查通过",
@@ -754,6 +758,12 @@ def _build_video_issue_report(
         "fps": (
             "根据实际制作要求，在 project.json 中配置目标帧率，"
             "并在后续检测逻辑中接入该配置后再判断是否合格。"
+        ),
+        "video_codec": (
+            "请在生成或导出阶段使用项目要求的视频编码重新导出。"
+        ),
+        "audio_codec": (
+            "请在生成或导出阶段使用项目要求的音频编码重新导出。"
         ),
         "subtitle_stream": (
             "如果独立字幕轨道不被允许，"
@@ -970,6 +980,29 @@ def _build_video_issue_report(
                     f"{target_fps} fps 后重新导出。"
                 )
 
+        elif check_name in {"video_codec", "audio_codec"}:
+            target = detail.get("target")
+
+            if target is None:
+                actual = detail.get("actual")
+                label = (
+                    "视频" if check_name == "video_codec" else "音频"
+                )
+                reason = (
+                    f"当前{label}编码为 {actual}，"
+                    f"但项目配置中没有目标{label}编码。"
+                )
+                title = (
+                    f"{label}编码标准尚未配置"
+                )
+                recommendation = (
+                    f"根据实际制作要求，在 project.json 中配置 "
+                    f"target_{check_name.split('_')[0]}_codec，"
+                    "然后再重新检查。"
+                )
+            else:
+                reason = detail.get("message", "")
+
         # 每条报告保留原始状态、原因与可执行建议。
         report_items.append({
             "check": check_name,
@@ -1070,6 +1103,104 @@ def _build_video_issue_report(
         "not_applicable_items": not_applicable_items,
         "unclassified_items": unclassified_items,
     }
+
+def _build_codec_check(
+    stream_type: str,
+    actual_codec,
+    target_codec,
+    stream_present: bool,
+) -> dict:
+    """
+    根据目标编码与实际编码生成 codec 检查结果。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        stream_type:
+            "video" 或 "audio"，用于拼消息文案。
+        actual_codec:
+            实际的 codec_name（可能是 str 或 None）。
+        target_codec:
+            project.json 中配置的目标编码（可能是 str 或 None）。
+        stream_present:
+            该类型的媒体流是否存在。
+
+    Returns:
+        checks["video_codec"] 或 checks["audio_codec"] 的字典结构。
+
+    状态语义：
+        - not_configured：项目未配置目标编码
+        - not_applicable：该类型媒体流不存在（仅用于 audio）
+        - not_checked：流存在但无法读取 codec_name，或 video 流意外缺失
+        - pass / fail：配置了目标编码并能读到实际编码
+    """
+
+    label = "视频" if stream_type == "video" else "音频"
+
+    # 项目未配置目标编码
+    if target_codec is None:
+        return {
+            "status": "not_configured",
+            "actual": actual_codec,
+            "target": None,
+            "message": (
+                f"项目配置中没有规定目标{label}编码，"
+                "因此只记录实际值，不进行合格性判断。"
+            ),
+        }
+
+    # 媒体流不存在
+    if not stream_present:
+        if stream_type == "audio":
+            return {
+                "status": "not_applicable",
+                "actual": None,
+                "target": target_codec,
+                "message": (
+                    f"项目要求音频编码为 {target_codec}，"
+                    "但当前视频没有音频流，本项不适用。"
+                ),
+            }
+        return {
+            "status": "not_checked",
+            "actual": None,
+            "target": target_codec,
+            "message": (
+                f"项目要求视频编码为 {target_codec}，"
+                "但当前视频没有可用的视频流，无法进行合格性判断。"
+            ),
+        }
+
+    # 流存在，但无法读取 codec_name
+    if actual_codec is None:
+        return {
+            "status": "not_checked",
+            "actual": None,
+            "target": target_codec,
+            "message": (
+                f"项目要求{label}编码为 {target_codec}，"
+                f"但无法读取实际{label}编码，"
+                "无法进行合格性判断。"
+            ),
+        }
+
+    codec_match = actual_codec == target_codec
+
+    return {
+        "status": "pass" if codec_match else "fail",
+        "actual": actual_codec,
+        "target": target_codec,
+        "message": (
+            f"{label}编码为 {actual_codec}，"
+            f"符合项目要求的 {target_codec}。"
+            if codec_match
+            else (
+                f"{label}编码为 {actual_codec}，"
+                f"不符合项目要求的 {target_codec}。"
+            )
+        ),
+    }
+
 
 def _build_fps_check(
     actual_fps,
@@ -1557,6 +1688,47 @@ def _check_video_requirements(
             target_fps=target_fps,
         )
 
+
+        # ----------------------------------------------------
+        # 8.1 检查视频与音频编码
+        # ----------------------------------------------------
+
+        target_video_codec = project.get("video_codec")
+        target_audio_codec = project.get("audio_codec")
+
+        streams = video_info.get("streams", [])
+
+        actual_video_codec = next(
+            (
+                s.get("codec_name")
+                for s in streams
+                if s.get("codec_type") == "video"
+            ),
+            None,
+        )
+
+        actual_audio_codec = next(
+            (
+                s.get("codec_name")
+                for s in streams
+                if s.get("codec_type") == "audio"
+            ),
+            None,
+        )
+
+        checks["video_codec"] = _build_codec_check(
+            stream_type="video",
+            actual_codec=actual_video_codec,
+            target_codec=target_video_codec,
+            stream_present=actual_video_codec is not None,
+        )
+
+        checks["audio_codec"] = _build_codec_check(
+            stream_type="audio",
+            actual_codec=actual_audio_codec,
+            target_codec=target_audio_codec,
+            stream_present=actual_audio_codec is not None,
+        )
 
         # ----------------------------------------------------
         # 9. 根据项目配置检查音频与字幕规范

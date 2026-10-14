@@ -5,6 +5,8 @@
   "target_duration_tolerance_seconds": 2,
   "max_shot_duration_seconds": 12,
   "target_fps": 24,
+  "video_codec": "h264",
+  "audio_codec": "aac",
   "character_style": "二维角色叠加写实背景",
   "description": "一个用于动画制作流程辅助的 AI Agent 项目",
   "audio_requirements": {

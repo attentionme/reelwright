@@ -457,6 +457,92 @@ class TestIssueReportClassification(unittest.TestCase):
         item = report["items"][0]
 
         self.assertEqual(item["title"], "帧率标准尚未配置")
+    def test_video_codec_pass_title(self):
+        checks = {
+            "video_codec": {
+                "status": "pass",
+                "message": "视频编码为 h264，符合项目要求的 h264。",
+                "actual": "h264",
+                "target": "h264",
+            },
+        }
+        compliance_summary = {"overall_status": "pass"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        self.assertEqual(len(report["passed_items"]), 1)
+        self.assertEqual(
+            report["passed_items"][0]["title"],
+            "视频编码检查通过",
+        )
+
+    def test_video_codec_fail_title_and_recommendation(self):
+        checks = {
+            "video_codec": {
+                "status": "fail",
+                "message": "视频编码为 hevc，不符合项目要求的 h264。",
+                "actual": "hevc",
+                "target": "h264",
+            },
+        }
+        compliance_summary = {"overall_status": "fail"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertEqual(item["severity"], "error")
+        self.assertEqual(item["title"], "视频编码不符合项目要求")
+        self.assertIn("编码", item["recommendation"])
+
+    def test_audio_codec_not_applicable(self):
+        checks = {
+            "audio_codec": {
+                "status": "not_applicable",
+                "message": "项目要求音频编码为 aac，但当前视频没有音频流，本项不适用。",
+                "actual": None,
+                "target": "aac",
+            },
+        }
+        compliance_summary = {"overall_status": "pass"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        self.assertEqual(len(report["not_applicable_items"]), 1)
+
+    def test_video_codec_not_configured(self):
+        checks = {
+            "video_codec": {
+                "status": "not_configured",
+                "message": "项目配置中没有规定目标视频编码。",
+                "actual": "h264",
+                "target": None,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertEqual(item["severity"], "warning")
+        self.assertIn("尚未配置", item["title"])
 
 if __name__ == "__main__":
     unittest.main()
