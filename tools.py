@@ -926,15 +926,19 @@ def _build_video_issue_report(
                 )
 
         # ------------------------------------------------
-        # 未配置检测标准：记录实际值，但不判定合格性。
+        # 帧率：区分已配置目标与未配置目标两种情况。
         # ------------------------------------------------
         elif check_name == "fps":
             actual_fps = detail.get("actual")
+            target_fps = detail.get("target")
 
-            reason = (
-                f"当前视频帧率为 {actual_fps} fps，"
-                "但项目配置中没有目标帧率。"
-            )
+            if target_fps is None:
+                reason = (
+                    f"当前视频帧率为 {actual_fps} fps，"
+                    "但项目配置中没有目标帧率。"
+                )
+            else:
+                reason = detail.get("message", "")
 
         # 每条报告保留原始状态、原因与可执行建议。
         report_items.append({
@@ -1041,6 +1045,74 @@ def _build_video_issue_report(
         "not_applicable_items": not_applicable_items,
         "unclassified_items": unclassified_items,
     }
+
+def _build_fps_check(
+    actual_fps,
+    target_fps,
+    tolerance: float = 0.5,
+) -> dict:
+    """
+    根据目标帧率与实际帧率生成 fps 检查结果。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        actual_fps:
+            实际帧率（可能是 float 或 None）。
+        target_fps:
+            项目配置的目标帧率（可能是 float / int / None）。
+        tolerance:
+            允许的绝对误差，默认 0.5，用于覆盖 23.976 ≈ 24 这类常见差异。
+
+    Returns:
+        checks["fps"] 的字典结构。
+    """
+
+    # 项目未配置目标帧率
+    if target_fps is None:
+        return {
+            "status": "not_configured",
+            "actual": actual_fps,
+            "target": None,
+            "message": (
+                "项目配置中没有规定目标帧率，"
+                "因此只记录实际值，不进行合格性判断。"
+            ),
+        }
+
+    # 目标已配置，但实际 fps 无法获取
+    if actual_fps is None:
+        return {
+            "status": "not_checked",
+            "actual": None,
+            "target": target_fps,
+            "message": (
+                f"项目要求帧率为 {target_fps} fps，"
+                "但当前视频没有可用的帧率信息，"
+                "无法进行合格性判断。"
+            ),
+        }
+
+    difference = abs(float(actual_fps) - float(target_fps))
+    fps_match = difference <= tolerance
+
+    return {
+        "status": "pass" if fps_match else "fail",
+        "actual": actual_fps,
+        "target": target_fps,
+        "difference": round(difference, 3),
+        "message": (
+            f"视频帧率 {actual_fps} fps，"
+            f"符合项目要求的 {target_fps} fps。"
+            if fps_match
+            else (
+                f"视频帧率 {actual_fps} fps，"
+                f"不符合项目要求的 {target_fps} fps，"
+                f"相差 {difference:.3f} fps。"
+            )
+        ),
+    }
+
 
 def _build_duration_check(
     actual_duration: float,
@@ -1413,17 +1485,15 @@ def _check_video_requirements(
         )
 
         # ----------------------------------------------------
-        # 8. 记录帧率
+        # 8. 检查帧率
         # ----------------------------------------------------
 
-        checks["fps"] = {
-            "status": "not_configured",
-            "actual": video_info["fps"],
-            "message": (
-                "项目配置中没有规定目标帧率，"
-                "因此只记录实际值，不进行合格性判断。"
-            ),
-        }
+        target_fps = project.get("target_fps")
+
+        checks["fps"] = _build_fps_check(
+            actual_fps=video_info["fps"],
+            target_fps=target_fps,
+        )
 
 
         # ----------------------------------------------------
