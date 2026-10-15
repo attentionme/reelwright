@@ -221,6 +221,113 @@ class TestIntegrationShot(unittest.TestCase):
 
         self.assertIn("aspect_ratio", passed)
 
+@unittest.skipUnless(
+    _ffmpeg_available(),
+    "ffmpeg / ffprobe 不在 PATH 中，跳过集成测试",
+)
+class TestIntegrationDirectory(unittest.TestCase):
+    """
+    端到端测试：从 ffprobe 到目录级聚合的完整链路。
+
+    使用与 TestIntegrationShot 相同的 _make_video 辅助函数。
+    断言的是目录摘要的结构与关键字段，不硬编码具体秒数。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(cls.tmpdir.name)
+
+        cls.shot_a = tmp / "shot_01.mp4"
+        cls.shot_b = tmp / "shot_02.mp4"
+
+        if not _make_video(cls.shot_a, 540, 960, 8):
+            raise unittest.SkipTest("无法生成 shot_01.mp4")
+
+        if not _make_video(cls.shot_b, 540, 960, 8):
+            raise unittest.SkipTest("无法生成 shot_02.mp4")
+
+        cls.directory = str(tmp)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    # --------------------------------------------------------
+    # 辅助
+    # --------------------------------------------------------
+
+    def _run_dir(self) -> dict:
+        raw = tools._check_directory_requirements(self.directory)
+        return json.loads(raw)
+
+    # --------------------------------------------------------
+    # 目录摘要
+    # --------------------------------------------------------
+
+    def test_directory_check_succeeds(self):
+        result = self._run_dir()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["failed_files"], [])
+
+    def test_directory_file_count(self):
+        result = self._run_dir()
+
+        summary = result["directory_summary"]
+
+        self.assertEqual(summary["file_count"], 2)
+
+    def test_directory_total_duration(self):
+        """两个 8 秒视频，总时长约 16 秒。"""
+
+        result = self._run_dir()
+
+        summary = result["directory_summary"]
+
+        self.assertAlmostEqual(
+            summary["total_duration_seconds"],
+            16.0,
+            delta=1.0,
+        )
+
+    def test_directory_below_target(self):
+        """16 秒远低于 45 秒目标，且超出 2 秒容差。"""
+
+        result = self._run_dir()
+
+        summary = result["directory_summary"]
+
+        self.assertEqual(summary["duration_status"], "below_target")
+        self.assertLess(summary["duration_difference_seconds"], 0)
+
+    def test_directory_consistency(self):
+        """两个视频参数相同，一致性检查应全部通过。"""
+
+        result = self._run_dir()
+
+        summary = result["directory_summary"]
+
+        self.assertTrue(summary["has_consistent_aspect_ratio"])
+        self.assertTrue(summary["has_consistent_fps"])
+        self.assertEqual(summary["distinct_video_codecs"], ["h264"])
+        self.assertEqual(summary["distinct_audio_codecs"], ["aac"])
+
+    def test_directory_files_sorted(self):
+        """两个文件的 file_name 应按名字升序。"""
+
+        result = self._run_dir()
+
+        names = [
+            f["file_name"]
+            for f in result["directory_summary"]["files"]
+        ]
+
+        self.assertEqual(names, sorted(names))
+
+
+if __name__ == "__main__":
+    unittest.main()
 
 if __name__ == "__main__":
     unittest.main()
