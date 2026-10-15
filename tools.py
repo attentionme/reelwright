@@ -1682,6 +1682,130 @@ def _build_directory_summary(
         "message": "".join(message_parts),
     }
 
+def _check_directory_requirements(
+    directory_path: str,
+) -> str:
+    """
+    检查一个镜头目录的整体情况。
+
+    只做目录级聚合：
+    - 统计文件数量
+    - 汇总总时长与目标对比
+    - 检查画幅 / 帧率 / 编码是否一致
+
+    不执行单文件的完整规范检查（不跑 silencedetect）。
+    不递归子目录。
+
+    Args:
+        directory_path:
+            本地目录的完整路径。
+
+    Returns:
+        JSON 字符串，包含目录摘要与失败文件列表。
+    """
+
+    print(
+        "\n【业务函数执行记录】"
+        f"_check_directory_requirements("
+        f"{directory_path}) 正在执行"
+    )
+
+    try:
+        dir_path = Path(directory_path).expanduser()
+
+        if not dir_path.exists():
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"目录不存在：{dir_path}",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        if not dir_path.is_dir():
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"路径不是目录：{dir_path}",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        # 收集所有 .mp4 文件（大小写不敏感，不递归）
+        mp4_files = sorted(
+            (
+                p
+                for p in dir_path.iterdir()
+                if p.is_file() and p.suffix.lower() == ".mp4"
+            ),
+            key=lambda p: p.name,
+        )
+
+        file_infos = []
+        failed_files = []
+
+        for mp4 in mp4_files:
+            raw = _get_video_info(str(mp4))
+
+            try:
+                info = json.loads(raw)
+            except json.JSONDecodeError:
+                failed_files.append({
+                    "file_name": mp4.name,
+                    "error": raw,
+                })
+                continue
+
+            if "duration_seconds" not in info:
+                failed_files.append({
+                    "file_name": mp4.name,
+                    "error": raw,
+                })
+                continue
+
+            file_infos.append(info)
+
+        project = load_project_data()
+
+        summary = _build_directory_summary(
+            file_infos=file_infos,
+            project_data=project,
+        )
+
+        result = {
+            "success": True,
+            "directory_path": str(dir_path.resolve()),
+            "directory_summary": summary,
+            "failed_files": failed_files,
+            "project_requirements": {
+                "target_duration_seconds": project.get(
+                    "target_duration_seconds"
+                ),
+                "target_duration_tolerance_seconds": project.get(
+                    "target_duration_tolerance_seconds"
+                ),
+            },
+        }
+
+        return json.dumps(
+            result,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    except Exception as exc:
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"目录检查失败：{exc}",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
 def _check_video_requirements(
     video_path: str,
     video_scope: str,
