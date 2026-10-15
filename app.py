@@ -1,4 +1,5 @@
 import gradio as gr
+import logging
 from openai import AsyncOpenAI
 
 from agents import (
@@ -298,6 +299,12 @@ demo = gr.ChatInterface(
 )
 
 if __name__ == "__main__":
+    # 启用工具调用日志，方便观察 Agent 的工具路由
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
+
     demo.launch(
         server_name="127.0.0.1",
         server_port=7860,

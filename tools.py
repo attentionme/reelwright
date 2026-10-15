@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import shutil
 import subprocess
@@ -6,6 +7,9 @@ from fractions import Fraction
 from pathlib import Path
 
 from agents import function_tool
+
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -43,7 +47,7 @@ def get_project_info() -> str:
     获取当前动画项目的完整项目资料。
     """
 
-    print(
+    logger.info(
         "\n【Agent 工具调用记录】"
         "get_project_info 已被调用"
     )
@@ -180,7 +184,7 @@ def _get_video_info(video_path: str) -> str:
     - streams：各媒体流的详细信息
     """
 
-    print(
+    logger.info(
         "\n【底层函数执行记录】"
         f"_get_video_info({video_path}) 正在执行"
     )
@@ -379,7 +383,7 @@ def get_video_info(video_path: str) -> str:
         video_path: 本地视频文件的完整路径。
     """
 
-    print(
+    logger.info(
         "\n【Agent 工具调用记录】"
         f"get_video_info({video_path}) 已被调用"
     )
@@ -1704,7 +1708,7 @@ def _check_directory_requirements(
         JSON 字符串，包含目录摘要与失败文件列表。
     """
 
-    print(
+    logger.info(
         "\n【业务函数执行记录】"
         f"_check_directory_requirements("
         f"{directory_path}) 正在执行"
@@ -1825,7 +1829,7 @@ def _check_video_requirements(
         JSON 字符串，包含实际视频数据和规范检查结果。
     """
 
-    print(
+    logger.info(
         "\n【业务函数执行记录】"
         f"_check_video_requirements("
         f"{video_path}, {video_scope}) 正在执行"
@@ -2426,7 +2430,7 @@ def check_video_requirements(
             - shot：单个镜头
     """
 
-    print(
+    logger.info(
         "\n【Agent 工具调用记录】"
         "check_video_requirements 已被调用"
     )
@@ -2465,7 +2469,7 @@ def check_directory_requirements(
             本地目录的完整路径。
     """
 
-    print(
+    logger.info(
         "\n【Agent 工具调用记录】"
         "check_directory_requirements 已被调用"
     )
