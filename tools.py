@@ -728,6 +728,7 @@ def _build_video_issue_report(
         "duration": "视频时长需要处理或复核",
         "fps": "帧率标准尚未配置",
         "video_codec": "视频编码不符合项目要求",
+        "file_name": "文件命名不符合项目规范",
         "audio_codec": "音频编码不符合项目要求",
         "subtitle_stream": "独立字幕轨道需要检查",
         "background_music": "背景音乐尚未确认",
@@ -741,6 +742,7 @@ def _build_video_issue_report(
         "duration": "时长检查通过",
         "fps": "帧率检查通过",
         "video_codec": "视频编码检查通过",
+        "file_name": "文件命名检查通过",
         "audio_codec": "音频编码检查通过",
         "subtitle_stream": "独立字幕轨道检查通过",
         "background_music": "背景音乐规则检查通过",
@@ -765,6 +767,9 @@ def _build_video_issue_report(
         ),
         "video_codec": (
             "请在生成或导出阶段使用项目要求的视频编码重新导出。"
+        ),
+        "file_name": (
+            "请按照项目要求的命名规则重命名文件后再重新检查。"
         ),
         "audio_codec": (
             "请在生成或导出阶段使用项目要求的音频编码重新导出。"
@@ -1007,6 +1012,26 @@ def _build_video_issue_report(
             else:
                 reason = detail.get("message", "")
 
+        elif check_name == "file_name":
+            pattern = detail.get("pattern")
+
+            if pattern is None:
+                actual = detail.get("actual")
+                reason = (
+                    f"当前文件名为 {actual}，"
+                    "但项目配置中没有规定文件命名规则。"
+                )
+                title = "文件命名规则尚未配置"
+                recommendation = (
+                    "根据实际制作要求，在 project.json 中配置 "
+                    "file_name_pattern，然后再重新检查。"
+                )
+            else:
+                reason = detail.get("message", "")
+                recommendation = (
+                    "请按照项目要求的命名规则重命名文件后重新检查。"
+                )
+
         # 每条报告保留原始状态、原因与可执行建议。
         report_items.append({
             "check": check_name,
@@ -1205,6 +1230,85 @@ def _build_codec_check(
         ),
     }
 
+def _build_file_name_check(
+    file_name,
+    pattern,
+) -> dict:
+    """
+    根据文件名与配置的正则模式生成检查结果。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        file_name:
+            实际文件名（可能是 str 或 None）。
+        pattern:
+            project.json 中配置的正则表达式（可能是 str 或 None）。
+            使用 re.match，从字符串开头匹配。
+
+    Returns:
+        checks["file_name"] 的字典结构。
+
+    状态语义：
+        - not_configured：项目未配置 file_name_pattern
+        - not_checked：文件名为空，或配置的正则无效
+        - pass / fail：正则匹配成功 / 失败
+    """
+
+    # 项目未配置命名规则
+    if pattern is None:
+        return {
+            "status": "not_configured",
+            "actual": file_name,
+            "pattern": None,
+            "message": (
+                "项目配置中没有规定文件命名规则，"
+                "因此只记录实际文件名，不进行合格性判断。"
+            ),
+        }
+
+    # 文件名为空
+    if not file_name:
+        return {
+            "status": "not_checked",
+            "actual": None,
+            "pattern": pattern,
+            "message": (
+                "项目要求文件命名符合指定规则，"
+                "但当前无法读取文件名，"
+                "无法进行合格性判断。"
+            ),
+        }
+
+    # 编译正则，捕获无效模式
+    try:
+        compiled = re.compile(pattern)
+    except re.error as exc:
+        return {
+            "status": "not_checked",
+            "actual": file_name,
+            "pattern": pattern,
+            "message": (
+                f"项目配置的文件名规则不是有效的正则表达式：{exc}。"
+                "无法进行合格性判断。"
+            ),
+        }
+
+    matched = compiled.match(file_name) is not None
+
+    return {
+        "status": "pass" if matched else "fail",
+        "actual": file_name,
+        "pattern": pattern,
+        "message": (
+            f"文件名 {file_name} 符合项目要求的命名规则。"
+            if matched
+            else (
+                f"文件名 {file_name} 不符合项目要求的命名规则："
+                f"{pattern}。"
+            )
+        ),
+    }
 
 def _build_fps_check(
     actual_fps,
@@ -2036,6 +2140,17 @@ def _check_video_requirements(
             actual_codec=actual_audio_codec,
             target_codec=target_audio_codec,
             stream_present=actual_audio_codec is not None,
+        )
+        
+        # ----------------------------------------------------
+        # 8.2 检查文件名是否符合命名规则
+        # ----------------------------------------------------
+
+        target_file_name_pattern = project.get("file_name_pattern")
+
+        checks["file_name"] = _build_file_name_check(
+            file_name=video_info.get("file_name"),
+            pattern=target_file_name_pattern,
         )
 
         # ----------------------------------------------------

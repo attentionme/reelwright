@@ -543,6 +543,73 @@ class TestIssueReportClassification(unittest.TestCase):
 
         self.assertEqual(item["severity"], "warning")
         self.assertIn("尚未配置", item["title"])
+    def test_file_name_pass_title(self):
+        checks = {
+            "file_name": {
+                "status": "pass",
+                "message": "文件名 ep01_shot_001.mp4 符合项目要求的命名规则。",
+                "actual": "ep01_shot_001.mp4",
+                "pattern": "^ep\\d{2}_shot_\\d{3}\\.mp4$",
+            },
+        }
+        compliance_summary = {"overall_status": "pass"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        self.assertEqual(len(report["passed_items"]), 1)
+        self.assertEqual(
+            report["passed_items"][0]["title"],
+            "文件命名检查通过",
+        )
+
+    def test_file_name_fail_title_and_recommendation(self):
+        checks = {
+            "file_name": {
+                "status": "fail",
+                "message": "文件名 第一段.mp4 不符合项目要求的命名规则。",
+                "actual": "第一段.mp4",
+                "pattern": "^ep\\d{2}_shot_\\d{3}\\.mp4$",
+            },
+        }
+        compliance_summary = {"overall_status": "fail"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertEqual(item["severity"], "error")
+        self.assertEqual(item["title"], "文件命名不符合项目规范")
+        self.assertIn("重命名", item["recommendation"])
+
+    def test_file_name_not_configured(self):
+        checks = {
+            "file_name": {
+                "status": "not_configured",
+                "message": "项目配置中没有规定文件命名规则。",
+                "actual": "第一段.mp4",
+                "pattern": None,
+            },
+        }
+        compliance_summary = {"overall_status": "needs_review"}
+
+        report = _build_video_issue_report(
+            checks=checks,
+            compliance_summary=compliance_summary,
+            video_scope="shot",
+        )
+
+        item = report["items"][0]
+
+        self.assertEqual(item["severity"], "warning")
+        self.assertEqual(item["title"], "文件命名规则尚未配置")
 
 if __name__ == "__main__":
     unittest.main()

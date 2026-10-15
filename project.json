@@ -5,6 +5,8 @@
   "target_duration_tolerance_seconds": 2,
   "max_shot_duration_seconds": 12,
   "target_fps": 24,
+  "file_name_pattern": "^ep\\d{2}_shot_\\d{3}\\.mp4$",
+  "file_name_pattern_description": "ep01_shot_001.mp4",
   "video_codec": "h264",
   "audio_codec": "aac",
   "character_style": "二维角色叠加写实背景",

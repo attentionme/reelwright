@@ -128,6 +128,13 @@ INSTR_CONFIG_FIELDS = (
     "如果项目配置了 audio_codec，但视频没有音频流，"
     "音频编码检查会返回 not_applicable，而不是 fail。"
     "不要在没有配置目标编码时声称编码检查通过或失败。"
+    "项目中的 file_name_pattern 是一个正则表达式，"
+    "用来规定合法的文件名格式。"
+    "file_name_pattern_description 只是给人看的示例，"
+    "不参与检测。"
+    "如果 project.json 中没有 file_name_pattern，"
+    "文件名检查会返回 not_configured。"
+    "不要在没有配置命名规则时声称文件名检查通过或失败。"
 )
 
 INSTR_DIRECTORY = (

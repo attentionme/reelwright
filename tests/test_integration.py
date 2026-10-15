@@ -95,18 +95,18 @@ class TestIntegrationShot(unittest.TestCase):
         cls.tmpdir = tempfile.TemporaryDirectory()
         tmp = Path(cls.tmpdir.name)
 
-        cls.shot_ok = tmp / "shot_ok.mp4"
-        cls.shot_bad_ratio = tmp / "shot_bad_ratio.mp4"
-        cls.shot_bad_duration = tmp / "shot_bad_duration.mp4"
+        cls.shot_ok = tmp / "ep01_shot_001.mp4"
+        cls.shot_bad_ratio = tmp / "ep01_shot_002.mp4"
+        cls.shot_bad_duration = tmp / "ep01_shot_003.mp4"
 
         if not _make_video(cls.shot_ok, 540, 960, 8):
-            raise unittest.SkipTest("无法生成 shot_ok.mp4")
+            raise unittest.SkipTest("无法生成 ep01_shot_001.mp4")
 
         if not _make_video(cls.shot_bad_ratio, 960, 540, 8):
-            raise unittest.SkipTest("无法生成 shot_bad_ratio.mp4")
+            raise unittest.SkipTest("无法生成 ep01_shot_002.mp4")
 
         if not _make_video(cls.shot_bad_duration, 540, 960, 13):
-            raise unittest.SkipTest("无法生成 shot_bad_duration.mp4")
+            raise unittest.SkipTest("无法生成 ep01_shot_003.mp4")
 
     @classmethod
     def tearDownClass(cls):
@@ -238,14 +238,14 @@ class TestIntegrationDirectory(unittest.TestCase):
         cls.tmpdir = tempfile.TemporaryDirectory()
         tmp = Path(cls.tmpdir.name)
 
-        cls.shot_a = tmp / "shot_01.mp4"
-        cls.shot_b = tmp / "shot_02.mp4"
+        cls.shot_a = tmp / "ep02_shot_001.mp4"
+        cls.shot_b = tmp / "ep02_shot_002.mp4"
 
         if not _make_video(cls.shot_a, 540, 960, 8):
-            raise unittest.SkipTest("无法生成 shot_01.mp4")
+            raise unittest.SkipTest("无法生成 ep02_shot_001.mp4")
 
         if not _make_video(cls.shot_b, 540, 960, 8):
-            raise unittest.SkipTest("无法生成 shot_02.mp4")
+            raise unittest.SkipTest("无法生成 ep02_shot_002.mp4")
 
         cls.directory = str(tmp)
 
