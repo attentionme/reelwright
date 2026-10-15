@@ -325,9 +325,56 @@ class TestIntegrationDirectory(unittest.TestCase):
 
         self.assertEqual(names, sorted(names))
 
+@unittest.skipUnless(
+    _ffmpeg_available(),
+    "ffmpeg / ffprobe 不在 PATH 中，跳过集成测试",
+)
+class TestIntegrationAspectRatioTolerance(unittest.TestCase):
+    """
+    验证 aspect_ratio_tolerance 端到端生效。
 
-if __name__ == "__main__":
-    unittest.main()
+    540×990 相对 9:16 偏差约 3%，在 5% 容差内 → aspect_ratio 应 pass。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.TemporaryDirectory()
+        tmp = Path(cls.tmpdir.name)
+
+        cls.shot_within_tolerance = tmp / "ep03_shot_001.mp4"
+
+        if not _make_video(cls.shot_within_tolerance, 540, 990, 8):
+            raise unittest.SkipTest("无法生成 ep03_shot_001.mp4")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmpdir.cleanup()
+
+    def test_within_tolerance_aspect_ratio_pass(self):
+        raw = tools._check_video_requirements(
+            str(self.shot_within_tolerance), "shot"
+        )
+        result = json.loads(raw)
+
+        self.assertTrue(result["success"])
+
+        passed = {
+            item["check"]
+            for item in result["issue_report"]["passed_items"]
+        }
+
+        self.assertIn("aspect_ratio", passed)
+
+    def test_within_tolerance_no_aspect_error(self):
+        raw = tools._check_video_requirements(
+            str(self.shot_within_tolerance), "shot"
+        )
+        result = json.loads(raw)
+
+        # 画幅不应出现在 error 列表里
+        for item in result["issue_report"]["items"]:
+            if item["check"] == "aspect_ratio":
+                self.fail("容差内的画幅不应出现在问题列表中")
 
 if __name__ == "__main__":
     unittest.main()

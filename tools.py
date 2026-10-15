@@ -1310,6 +1310,86 @@ def _build_file_name_check(
         ),
     }
 
+def _build_aspect_ratio_check(
+    width,
+    height,
+    expected_aspect_ratio: str,
+    tolerance: float = 0.0,
+) -> dict:
+    """
+    根据实际分辨率和目标画幅比例生成画幅检查结果。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        width / height:
+            实际像素宽高。
+        expected_aspect_ratio:
+            目标画幅，如 "9:16"。
+        tolerance:
+            相对容差。语义：
+            - tolerance = 0：只接受精确匹配（整数交叉相乘）
+            - tolerance > 0：额外接受 |实际比例 - 目标比例| / 目标比例
+              小于等于 tolerance 的情况
+
+    Returns:
+        checks["aspect_ratio"] 的字典结构。
+    """
+
+    ratio_width, ratio_height = map(
+        int,
+        expected_aspect_ratio.split(":"),
+    )
+
+    # 精确匹配：用整数交叉相乘避免浮点误差
+    exact_match = (
+        width * ratio_height == height * ratio_width
+    )
+
+    target_ratio = ratio_width / ratio_height
+    actual_ratio = width / height
+
+    if exact_match:
+        matched = True
+        relative_diff = 0.0
+    elif tolerance > 0:
+        relative_diff = (
+            abs(actual_ratio - target_ratio) / target_ratio
+        )
+        matched = relative_diff <= tolerance
+    else:
+        relative_diff = abs(actual_ratio - target_ratio) / target_ratio
+        matched = False
+
+    if matched:
+        if relative_diff == 0.0:
+            message = "视频画幅符合项目要求。"
+        else:
+            message = (
+                f"视频画幅符合项目要求。"
+                f"项目要求 {expected_aspect_ratio}，"
+                f"实际为 {width}×{height}，"
+                f"偏差 {relative_diff:.2%} 在允许范围内。"
+            )
+    else:
+        message = (
+            f"视频画幅不符合项目要求。"
+            f"项目要求 {expected_aspect_ratio}，"
+            f"实际为 {width}×{height}。"
+        )
+
+    return {
+        "status": "pass" if matched else "fail",
+        "expected": expected_aspect_ratio,
+        "actual_ratio": round(actual_ratio, 6),
+        "width": width,
+        "height": height,
+        "tolerance": tolerance,
+        "difference_ratio": round(relative_diff, 6),
+        "message": message,
+    }
+
+
 def _build_fps_check(
     actual_fps,
     target_fps,
@@ -2017,24 +2097,11 @@ def _check_video_requirements(
         )
 
         # ----------------------------------------------------
-        # 5. 解析目标画幅
+        # 5. 获取视频尺寸
         # ----------------------------------------------------
-
-        ratio_width, ratio_height = map(
-            int,
-            expected_aspect_ratio.split(":"),
-        )
 
         width = video_info["width"]
         height = video_info["height"]
-
-        # 使用整数交叉相乘，避免浮点数比较误差
-        aspect_ratio_match = (
-            width * ratio_height
-            == height * ratio_width
-        )
-
-        actual_aspect_ratio = width / height
 
         actual_duration = video_info[
             "duration_seconds"
@@ -2046,29 +2113,19 @@ def _check_video_requirements(
         # 6. 检查画幅
         # ----------------------------------------------------
 
-        checks["aspect_ratio"] = {
-            "status": (
-                "pass"
-                if aspect_ratio_match
-                else "fail"
-            ),
-            "expected": expected_aspect_ratio,
-            "actual_ratio": round(
-                actual_aspect_ratio,
-                6,
-            ),
-            "width": width,
-            "height": height,
-            "message": (
-                "视频画幅符合项目要求。"
-                if aspect_ratio_match
-                else (
-                    "视频画幅不符合项目要求。"
-                    f"项目要求 {expected_aspect_ratio}，"
-                    f"实际为 {width}:{height}。"
-                )
-            ),
-        }
+        aspect_ratio_tolerance = float(
+            project.get(
+                "aspect_ratio_tolerance",
+                0,
+            )
+        )
+
+        checks["aspect_ratio"] = _build_aspect_ratio_check(
+            width=width,
+            height=height,
+            expected_aspect_ratio=expected_aspect_ratio,
+            tolerance=aspect_ratio_tolerance,
+        )
 
         # ----------------------------------------------------
         # 7. 根据视频范围检查时长

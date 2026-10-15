@@ -135,6 +135,9 @@ INSTR_CONFIG_FIELDS = (
     "如果 project.json 中没有 file_name_pattern，"
     "文件名检查会返回 not_configured。"
     "不要在没有配置命名规则时声称文件名检查通过或失败。"
+    "项目中的 aspect_ratio_tolerance 表示画幅比例的相对容差，"
+    "默认 0 表示只接受精确匹配。"
+    "配置后，实际比例与目标比例的相对偏差在容差内的视为符合要求。"
 )
 
 INSTR_DIRECTORY = (
