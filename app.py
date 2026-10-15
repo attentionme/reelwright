@@ -182,12 +182,12 @@ def build_agent(api_key: str):
         name="动画制作助手",
         instructions=INSTRUCTIONS,
         model=model,
-       tools=[
-    get_project_info,
-    get_video_info,
-    check_video_requirements,
-    check_directory_requirements,
-],
+        tools=[
+            get_project_info,
+            get_video_info,
+            check_video_requirements,
+            check_directory_requirements,
+        ],
     )
 
     return agent, client
