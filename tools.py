@@ -2437,41 +2437,42 @@ def check_video_requirements(
     )
 
 
-# ============================================================
-# 7. 本地测试入口
-# ============================================================
-
-if __name__ == "__main__":
-
-    test_video = (
-        input("请输入 MP4 文件路径：")
-        .strip()
-        .strip('"')
+    return _check_video_requirements(
+        video_path,
+        video_scope,
     )
 
-    print("\n请选择视频类型：")
-    print("1. 整集视频")
-    print("2. 单个镜头")
 
-    scope_choice = input(
-        "请输入 1 或 2："
-    ).strip()
+# ============================================================
+# 7. Agent 工具：检查镜头目录
+# ============================================================
 
-    if scope_choice == "1":
-        video_scope = "episode"
+@function_tool
+def check_directory_requirements(
+    directory_path: str,
+) -> str:
+    """
+    检查一个镜头目录的整体情况。
 
-    elif scope_choice == "2":
-        video_scope = "shot"
+    只做目录级聚合：统计文件数量、汇总总时长、
+    检查画幅 / 帧率 / 编码是否一致。
 
-    else:
-        print("输入无效。")
-        raise SystemExit(1)
+    不递归子目录。
+    不对每个镜头执行完整的单文件规范检查。
 
-    print("\n【视频规范检查结果】")
+    Args:
+        directory_path:
+            本地目录的完整路径。
+    """
 
     print(
-        _check_video_requirements(
-            test_video,
-            video_scope,
-        )
+        "\n【Agent 工具调用记录】"
+        "check_directory_requirements 已被调用"
     )
+
+    return _check_directory_requirements(directory_path)
+
+
+# ============================================================
+# 8. 本地测试入口
+# ============================================================

@@ -12,6 +12,7 @@ from tools import (
     get_project_info,
     get_video_info,
     check_video_requirements,
+    check_directory_requirements,
 )
 
 # 这是个人本地应用，关闭不需要的远程追踪上传
@@ -152,7 +153,21 @@ def build_agent(api_key: str):
     "如果项目配置了 audio_codec，但视频没有音频流，"
     "音频编码检查会返回 not_applicable，而不是 fail。"
     "不要在没有配置目标编码时声称编码检查通过或失败。"
-    
+
+    "如果用户要求检查一个镜头目录，而不是单个视频文件，"
+    "使用 check_directory_requirements。"
+    "它只做目录级聚合：统计文件数量、汇总总时长、"
+    "检查画幅 / 帧率 / 编码是否一致。"
+    "它不递归子目录，也不对每个镜头执行完整的单文件规范检查。"
+    "如果用户需要对每个镜头做完整规范检查，"
+    "应逐个调用 check_video_requirements。"
+
+    "目录检查返回的 duration_status 只表示总时长与整集目标时长的偏差，"
+    "它本身不是一个已经判定的合规结论。"
+    "报告这一项时，应说明实际总时长、目标时长和偏差量，"
+    "由用户结合项目语境判断是否需要调整，"
+    "不要替用户把它直接定性为「不合规」或「通过」。"
+
     "当前工具无法检查字幕、音轨内容、"
     "画面中的角色风格、构图或每个镜头的实际数量。"
     "不要声称已经完成这些检查。"
@@ -167,6 +182,7 @@ def build_agent(api_key: str):
     get_project_info,
     get_video_info,
     check_video_requirements,
+    check_directory_requirements,
 ],
     )
 
