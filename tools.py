@@ -1502,6 +1502,186 @@ def _build_compliance_summary(checks: dict) -> dict:
         "needs_review": review_items,
     }
 
+def _build_directory_summary(
+    file_infos: list,
+    project_data: dict,
+) -> dict:
+    """
+    汇总一个目录中的多个镜头文件信息。
+
+    纯函数：不访问文件，不访问网络，不调用任何媒体工具。
+
+    Args:
+        file_infos:
+            每个元素是一个镜头文件的信息字典。
+            至少包含 file_name、duration_seconds、width、height、fps。
+            可选包含 streams（用于提取编码）。
+        project_data:
+            项目配置。至少包含 target_duration_seconds。
+            可选包含 target_duration_tolerance_seconds。
+
+    Returns:
+        目录级聚合摘要字典。
+    """
+
+    file_count = len(file_infos)
+
+    target_duration = float(
+        project_data.get("target_duration_seconds", 0)
+    )
+    tolerance = float(
+        project_data.get("target_duration_tolerance_seconds", 0)
+    )
+
+    # 空目录
+    if file_count == 0:
+        return {
+            "file_count": 0,
+            "files": [],
+            "total_duration_seconds": 0.0,
+            "target_duration_seconds": target_duration,
+            "target_duration_tolerance_seconds": tolerance,
+            "duration_difference_seconds": 0.0,
+            "duration_status": "not_applicable",
+            "distinct_aspect_ratios": [],
+            "distinct_fps": [],
+            "distinct_video_codecs": [],
+            "distinct_audio_codecs": [],
+            "has_consistent_aspect_ratio": True,
+            "has_consistent_fps": True,
+            "message": "目录中没有找到可用的视频文件。",
+        }
+
+    # 按文件名排序，保证输出稳定
+    sorted_infos = sorted(
+        file_infos,
+        key=lambda item: item.get("file_name", ""),
+    )
+
+    total_duration = 0.0
+    aspect_ratio_set = set()
+    fps_set = set()
+    video_codec_set = set()
+    audio_codec_set = set()
+    files_summary = []
+
+    for info in sorted_infos:
+        duration = info.get("duration_seconds", 0.0)
+
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            duration = 0.0
+
+        total_duration += duration
+
+        width = info.get("width")
+        height = info.get("height")
+
+        if width is not None and height is not None:
+            aspect_ratio_set.add((width, height))
+
+        fps = info.get("fps")
+
+        if fps is not None:
+            fps_set.add(fps)
+
+        # 从 streams 里提取编码
+        for stream in info.get("streams") or []:
+            if not isinstance(stream, dict):
+                continue
+
+            codec_type = stream.get("codec_type")
+            codec_name = stream.get("codec_name")
+
+            if not codec_name:
+                continue
+
+            if codec_type == "video":
+                video_codec_set.add(codec_name)
+            elif codec_type == "audio":
+                audio_codec_set.add(codec_name)
+
+        files_summary.append({
+            "file_name": info.get("file_name"),
+            "duration_seconds": round(duration, 3),
+            "width": width,
+            "height": height,
+            "fps": fps,
+        })
+
+    total_duration = round(total_duration, 3)
+
+    duration_difference = round(
+        total_duration - target_duration,
+        3,
+    )
+
+    abs_difference = abs(duration_difference)
+
+    if abs_difference <= tolerance:
+        duration_status = "at_target"
+    elif duration_difference < 0:
+        duration_status = "below_target"
+    else:
+        duration_status = "above_target"
+
+    distinct_aspect_ratios = sorted(
+        [[w, h] for (w, h) in aspect_ratio_set]
+    )
+    distinct_fps = sorted(fps_set)
+    distinct_video_codecs = sorted(video_codec_set)
+    distinct_audio_codecs = sorted(audio_codec_set)
+
+    has_consistent_aspect_ratio = len(distinct_aspect_ratios) <= 1
+    has_consistent_fps = len(distinct_fps) <= 1
+
+    message_parts = [
+        f"目录中共有 {file_count} 个镜头文件，"
+        f"总时长 {total_duration} 秒，"
+        f"目标时长 {target_duration} 秒。"
+    ]
+
+    if duration_status == "at_target":
+        message_parts.append("总时长在允许误差范围内。")
+    elif duration_status == "below_target":
+        message_parts.append(
+            f"总时长比目标少 {abs_difference} 秒，超出允许误差。"
+        )
+    else:
+        message_parts.append(
+            f"总时长比目标多 {abs_difference} 秒，超出允许误差。"
+        )
+
+    if not has_consistent_aspect_ratio:
+        message_parts.append(
+            f"检测到 {len(distinct_aspect_ratios)} 种不同画幅，"
+            "镜头之间不一致。"
+        )
+
+    if not has_consistent_fps:
+        message_parts.append(
+            f"检测到 {len(distinct_fps)} 种不同帧率，"
+            "镜头之间不一致。"
+        )
+
+    return {
+        "file_count": file_count,
+        "files": files_summary,
+        "total_duration_seconds": total_duration,
+        "target_duration_seconds": target_duration,
+        "target_duration_tolerance_seconds": tolerance,
+        "duration_difference_seconds": duration_difference,
+        "duration_status": duration_status,
+        "distinct_aspect_ratios": distinct_aspect_ratios,
+        "distinct_fps": distinct_fps,
+        "distinct_video_codecs": distinct_video_codecs,
+        "distinct_audio_codecs": distinct_audio_codecs,
+        "has_consistent_aspect_ratio": has_consistent_aspect_ratio,
+        "has_consistent_fps": has_consistent_fps,
+        "message": "".join(message_parts),
+    }
+
 def _check_video_requirements(
     video_path: str,
     video_scope: str,
