@@ -25,3 +25,5 @@ __pycache__/
 # 编辑器配置
 .vscode/
 .idea/
+
+config.json

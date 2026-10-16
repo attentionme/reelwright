@@ -1,4 +1,6 @@
+import copy
 import gradio as gr
+import json
 import logging
 import os
 from pathlib import Path
@@ -19,14 +21,92 @@ from tools import (
     check_directory_requirements,
 )
 
-def _load_default_api_key() -> str:
-    """从环境变量或 .env 文件读取 DeepSeek API Key。"""
+CONFIG_PATH = Path(__file__).with_name("config.json")
 
+DEFAULT_CONFIG = {
+    "active_provider": "deepseek",
+    "providers": {
+        "deepseek": {
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-flash",
+            "api_key": "",
+        }
+    },
+}
+
+
+def _read_config() -> dict:
+    """读取 config.json，并与默认结构合并。读取失败时回退到默认配置。"""
+
+    if not CONFIG_PATH.exists():
+        return copy.deepcopy(DEFAULT_CONFIG)
+
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception:
+        logging.exception("读取 config.json 失败，使用默认配置")
+        return copy.deepcopy(DEFAULT_CONFIG)
+
+    merged = copy.deepcopy(DEFAULT_CONFIG)
+
+    if isinstance(data, dict):
+        merged.update(data)
+
+        data_providers = data.get("providers")
+        if isinstance(data_providers, dict):
+            providers = merged.setdefault("providers", {})
+            for name, provider_data in data_providers.items():
+                if isinstance(provider_data, dict):
+                    providers.setdefault(name, {}).update(provider_data)
+
+    return merged
+
+
+def _write_config(config: dict) -> None:
+    """原子写入 config.json，避免半写文件。"""
+
+    tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+
+    with tmp_path.open("w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+    tmp_path.replace(CONFIG_PATH)
+
+
+def _save_api_key_from_ui(api_key: str) -> str:
+    """把 UI 中输入的 API Key 保存到当前 active_provider。"""
+
+    config = _read_config()
+    active_provider = config.get("active_provider", "deepseek")
+
+    providers = config.setdefault("providers", {})
+    provider = providers.setdefault(active_provider, {})
+    provider["api_key"] = (api_key or "").strip()
+
+    _write_config(config)
+
+    return f"已保存到 config.json，当前平台：{active_provider}"
+
+def _load_default_api_key() -> str:
+    """按 config.json > 环境变量 > .env 的顺序读取 API Key。"""
+
+    # 1. config.json
+    config = _read_config()
+    active_provider = config.get("active_provider", "deepseek")
+    provider = config.get("providers", {}).get(active_provider, {})
+    key = (provider.get("api_key") or "").strip()
+
+    if key:
+        return key
+
+    # 2. 环境变量
     key = os.getenv("DEEPSEEK_API_KEY", "").strip()
 
     if key:
         return key
 
+    # 3. .env 文件
     env_path = Path(__file__).with_name(".env")
 
     if not env_path.exists():
@@ -336,16 +416,29 @@ key_input = gr.Textbox(
     value=DEFAULT_API_KEY,
 )
 
-demo = gr.ChatInterface(
-    fn=chat,
+with gr.Blocks(
     title="动画制作 Agent",
-    description="输入问题，让 Agent 查询项目资料并回答。",
-    additional_inputs=[key_input],
-    additional_inputs_accordion="模型设置",
-)
+) as demo:
+    gr.ChatInterface(
+        fn=chat,
+        title="动画制作 Agent",
+        description="输入问题，让 Agent 查询项目资料并回答。",
+        additional_inputs=[key_input],
+        additional_inputs_accordion="模型设置",
+    )
+
+    with gr.Row():
+        save_settings_btn = gr.Button("保存设置", scale=0)
+        save_settings_status = gr.Markdown("")
+
+    save_settings_btn.click(
+        fn=_save_api_key_from_ui,
+        inputs=[key_input],
+        outputs=[save_settings_status],
+    )
+
 
 if __name__ == "__main__":
-    # 启用工具调用日志，方便观察 Agent 的工具路由
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
