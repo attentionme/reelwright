@@ -1,5 +1,8 @@
 import gradio as gr
 import logging
+import os
+from pathlib import Path
+
 from openai import AsyncOpenAI
 
 from agents import (
@@ -15,6 +18,38 @@ from tools import (
     check_video_requirements,
     check_directory_requirements,
 )
+
+def _load_default_api_key() -> str:
+    """从环境变量或 .env 文件读取 DeepSeek API Key。"""
+
+    key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+
+    if key:
+        return key
+
+    env_path = Path(__file__).with_name(".env")
+
+    if not env_path.exists():
+        return ""
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        if "=" not in line:
+            continue
+
+        name, _, value = line.partition("=")
+
+        if name.strip() == "DEEPSEEK_API_KEY":
+            return value.strip().strip('"').strip("'")
+
+    return ""
+
+
+DEFAULT_API_KEY = _load_default_api_key()
 
 # 这是个人本地应用，关闭不需要的远程追踪上传
 set_tracing_disabled(disabled=True)
@@ -298,6 +333,7 @@ key_input = gr.Textbox(
     label="DeepSeek API Key",
     type="password",
     placeholder="在这里输入你的 API Key",
+    value=DEFAULT_API_KEY,
 )
 
 demo = gr.ChatInterface(
