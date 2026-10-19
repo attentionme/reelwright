@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from pathlib import Path
-logger = logging.getLogger(__name__)
 
 from openai import AsyncOpenAI
 
@@ -21,6 +20,10 @@ from tools import (
     check_video_requirements,
     check_directory_requirements,
 )
+
+
+logger = logging.getLogger(__name__)
+
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -79,6 +82,7 @@ DEFAULT_CONFIG = {
     },
 }
 
+
 def _read_config() -> dict:
     """读取 config.json，与默认结构逐 provider 深度合并。读取失败时回退到默认配置。"""
 
@@ -97,13 +101,11 @@ def _read_config() -> dict:
     if not isinstance(data, dict):
         return merged
 
-    # 顶层字段（active_provider 等）直接覆盖
     for key, value in data.items():
         if key == "providers":
             continue
         merged[key] = value
 
-    # providers 逐项深度合并：保留默认字段，用用户值覆盖
     data_providers = data.get("providers")
     if isinstance(data_providers, dict):
         merged_providers = merged.setdefault("providers", {})
@@ -118,6 +120,7 @@ def _read_config() -> dict:
 
     return merged
 
+
 def _write_config(config: dict) -> None:
     """原子写入 config.json，避免半写文件。"""
 
@@ -127,6 +130,7 @@ def _write_config(config: dict) -> None:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
     tmp_path.replace(CONFIG_PATH)
+
 
 def _resolve_provider_config(config, provider_name=None) -> dict:
     """
@@ -140,10 +144,6 @@ def _resolve_provider_config(config, provider_name=None) -> dict:
         3. "deepseek"
 
     api_key 不回退：缺失即返回空字符串，由调用方决定如何处理。
-
-    返回字典字段：
-        name, display_name, base_url, model, models, api_key, configured
-        configured 表示 base_url 与 model 是否均非空。
     """
 
     if not isinstance(config, dict):
@@ -183,7 +183,6 @@ def _resolve_provider_config(config, provider_name=None) -> dict:
     if not isinstance(display_name, str) or not display_name.strip():
         display_name = chosen_name
 
-    # model 解析优先级：default_model → models[0] → 旧字段 model → 默认
     model = raw.get("default_model")
     if not isinstance(model, str) or not model.strip():
         models_field = raw.get("models")
@@ -222,6 +221,51 @@ def _resolve_provider_config(config, provider_name=None) -> dict:
         "configured": configured,
     }
 
+
+def _provider_options(config) -> tuple:
+    """
+    从 config 生成 Dropdown 的 choices 和默认选中项。
+
+    纯函数：不访问文件，不访问网络。
+
+    Returns:
+        (choices, default_value)
+        choices 是 [(display_name, provider_name), ...]，deepseek 永远排第一，
+        其余按 provider_name 字母序。
+    """
+
+    if not isinstance(config, dict):
+        config = {}
+
+    providers = config.get("providers")
+    if not isinstance(providers, dict) or not providers:
+        providers = DEFAULT_CONFIG.get("providers", {})
+
+    choices = []
+    for name, provider_data in providers.items():
+        if not isinstance(name, str) or not name:
+            continue
+        label = name
+        if isinstance(provider_data, dict):
+            display = provider_data.get("display_name")
+            if isinstance(display, str) and display.strip():
+                label = display.strip()
+        choices.append((label, name))
+
+    choices.sort(key=lambda item: (item[1] != "deepseek", item[1]))
+
+    if not choices:
+        return [], "deepseek"
+
+    names = [item[1] for item in choices]
+    active = config.get("active_provider", "deepseek")
+
+    if not isinstance(active, str) or active not in names:
+        active = choices[0][1]
+
+    return choices, active
+
+
 def _save_api_key_from_ui(api_key: str) -> str:
     """把 UI 中输入的 API Key 保存到当前 active_provider。"""
 
@@ -236,6 +280,40 @@ def _save_api_key_from_ui(api_key: str) -> str:
 
     resolved = _resolve_provider_config(config, active_provider)
     return f"已保存到 config.json，当前平台：{resolved['display_name']}"
+
+
+def _switch_active_provider(provider_name: str):
+    """
+    切换 active_provider，写入 config.json，并返回 UI 更新指令。
+    """
+
+    config = _read_config()
+    providers = config.get("providers", {})
+
+    if not isinstance(provider_name, str) or provider_name not in providers:
+        resolved = _resolve_provider_config(
+            config, config.get("active_provider")
+        )
+        return (
+            gr.update(
+                value=resolved["api_key"],
+                label=f"{resolved['display_name']} API Key",
+            ),
+            f"无效的平台标识：{provider_name}",
+        )
+
+    config["active_provider"] = provider_name
+    _write_config(config)
+
+    resolved = _resolve_provider_config(config, provider_name)
+
+    return (
+        gr.update(
+            value=resolved["api_key"],
+            label=f"{resolved['display_name']} API Key",
+        ),
+        f"已切换到 {resolved['display_name']}",
+    )
 
 
 def _load_default_api_key() -> str:
@@ -282,9 +360,6 @@ set_tracing_disabled(disabled=True)
 
 # ============================================================
 # Agent instructions：按主题分段
-#
-# 每个常量承载一类指令，最终用空行连接后传给 Agent。
-# 分段只是为了便于维护，最终内容与历史版本逐字一致。
 # ============================================================
 
 INSTR_ROLE_AND_ROUTING = (
@@ -436,7 +511,6 @@ INSTRUCTIONS = "\n\n".join(
 )
 
 
-# 根据界面输入的 API Key 创建 Agent
 def build_agent(api_key_override: str = ""):
     config = _read_config()
     provider = _resolve_provider_config(config, config.get("active_provider"))
@@ -480,6 +554,7 @@ def build_agent(api_key_override: str = ""):
     )
 
     return agent, client
+
 
 def _format_request_error(exc: Exception, provider: dict) -> str:
     """
@@ -543,11 +618,6 @@ def _extract_history_lines(history) -> list:
     """
     从 Gradio 的 history 中提取对话行。
 
-    兼容两种 content 格式：
-    - Gradio 5.x：content 是 list of message blocks，
-      例如 [{"text": "...", "type": "text"}, ...]
-    - 旧格式：content 是 str
-
     纯函数：不访问网络，不依赖 Gradio 运行时。
     """
 
@@ -560,7 +630,6 @@ def _extract_history_lines(history) -> list:
         role = item.get("role")
         content = item.get("content", "")
 
-        # Gradio 5.x：content 是 message block 列表
         if isinstance(content, list):
             text_parts = []
 
@@ -575,7 +644,6 @@ def _extract_history_lines(history) -> list:
 
             content = "\n".join(text_parts)
 
-        # content 必须是字符串才继续
         if not isinstance(content, str):
             continue
 
@@ -590,7 +658,6 @@ def _extract_history_lines(history) -> list:
     return lines
 
 
-# Gradio 会把用户问题、对话历史和密钥传给这个函数
 async def chat(message, history, api_key):
     try:
         agent, client = build_agent(api_key or "")
@@ -627,12 +694,12 @@ async def chat(message, history, api_key):
         await client.close()
 
 
-# 密钥输入框使用密码显示形式
 _startup_config = _read_config()
 _active_provider_config = _resolve_provider_config(
     _startup_config,
     _startup_config.get("active_provider", "deepseek"),
 )
+_provider_choices, _default_provider = _provider_options(_startup_config)
 
 key_input = gr.Textbox(
     label=f"{_active_provider_config['display_name']} API Key",
@@ -653,8 +720,19 @@ with gr.Blocks(
     )
 
     with gr.Row():
+        provider_dropdown = gr.Dropdown(
+            choices=_provider_choices,
+            value=_default_provider,
+            label="大模型平台",
+        )
         save_settings_btn = gr.Button("保存设置", scale=0)
         save_settings_status = gr.Markdown("")
+
+    provider_dropdown.change(
+        fn=_switch_active_provider,
+        inputs=[provider_dropdown],
+        outputs=[key_input, save_settings_status],
+    )
 
     save_settings_btn.click(
         fn=_save_api_key_from_ui,
