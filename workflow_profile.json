@@ -1,0 +1,19 @@
+{
+  "name": "h3_ref2v_current",
+  "workflow_file": "workflow_api.json",
+  "output_node": {"id": "148", "title": "Video Combine 🎥🅥🅗🅢"},
+  "output_dir": "D:/Comfy-Desktop/ComfyUI-Shared/output",
+  "roles": {
+    "prompt":          {"node": "138", "param": "value"},
+    "seed":            {"node": "129", "param": "noise_seed"},
+    "duration":        {"node": "132", "param": "value"},
+    "aspect_ratio":    {"node": "115", "param": "aspect_ratio"},
+    "megapixels":      {"node": "115", "param": "megapixels"},
+    "steps":           {"node": "160", "param": "steps"},
+    "sigmas":          {"node": "147", "param": "sigmas"},
+    "unet":            {"node": "127", "param": "unet_name"},
+    "lora":            {"node": "145", "param": "lora_name"},
+    "lora_strength":   {"node": "145", "param": "strength_model"},
+    "filename_prefix": {"node": "148", "param": "filename_prefix"}
+  }
+}

@@ -1,0 +1,359 @@
+{
+  "115": {
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 1,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "Resolution Selector (Size)"
+    }
+  },
+  "119": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "120": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "121": {
+    "inputs": {
+      "samples": [
+        "125",
+        0
+      ],
+      "vae": [
+        "120",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "VAE解码（音频）"
+    }
+  },
+  "122": {
+    "inputs": {
+      "samples": [
+        "125",
+        0
+      ],
+      "vae": [
+        "119",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "123": {
+    "inputs": {
+      "sampler_name": "er_sde"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "K采样器选择"
+    }
+  },
+  "125": {
+    "inputs": {
+      "noise": [
+        "129",
+        0
+      ],
+      "guider": [
+        "126",
+        0
+      ],
+      "sampler": [
+        "123",
+        0
+      ],
+      "sigmas": [
+        "147",
+        0
+      ],
+      "latent_image": [
+        "136",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "自定义采样器（高级）"
+    }
+  },
+  "126": {
+    "inputs": {
+      "model": [
+        "150",
+        0
+      ],
+      "conditioning": [
+        "136",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "基本引导器"
+    }
+  },
+  "127": {
+    "inputs": {
+      "unet_name": "Cobijada_H3_Hybrid_Uncensored_pruned_hybrid_int8_convrot_pruned.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "128": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "129": {
+    "inputs": {
+      "noise_seed": 572228739114210
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "随机噪波"
+    }
+  },
+  "131": {
+    "inputs": {
+      "expression": "max(5, round(a * 24)) + (5 - (max(5, round(a * 24)) % 17)) % 17",
+      "values.a": [
+        "132",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "数学表达式"
+    }
+  },
+  "132": {
+    "inputs": {
+      "value": 10
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float (Duration)"
+    }
+  },
+  "136": {
+    "inputs": {
+      "prompt": [
+        "138",
+        0
+      ],
+      "width": [
+        "115",
+        0
+      ],
+      "height": [
+        "115",
+        1
+      ],
+      "length": [
+        "131",
+        1
+      ],
+      "ref_image_size": "match",
+      "clip": [
+        "128",
+        0
+      ],
+      "vae": [
+        "119",
+        0
+      ],
+      "audio_vae": [
+        "120",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "137",
+        0
+      ],
+      "ref_images.ref_image_1": [
+        "139",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "MiniMax H3 参考转视频"
+    }
+  },
+  "137": {
+    "inputs": {
+      "image": "小满1.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "138": {
+    "inputs": {
+      "value": "subject_definitions:\n<Subject 1> is Xiaoman, the young man from <Picture 1>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. He remains a quiet, thin young Chinese man with a clearly 2D hand-drawn visual language, clean dark ink outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble.\n\n<Subject 2> is Taozi, the young woman from <Picture 2>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. She remains a natural young Chinese woman with clear hand-drawn outlines, flat graphic colors, simplified anatomy, and restrained facial animation.\n\n<Picture 5> is the exact final frame of the previous 12-second video clip and the required first frame of [Shot 1] in this target video. It contains the same apartment environment, character positions, poses, facial expressions, lighting, framing, and visual composition from the end of the previous clip. Use <Picture 5> as the strict visual starting state.\n\nsummary:\n[keyframe completion + reference generation] The target video is the final 9-second continuation of the previous clip and begins exactly from <Picture 5>, the previous clip's final frame. The first frame must preserve the previous visual state with no reinterpretation. Xiaoman answers Taozi and both characters simply settle down to eat. The final moment should feel quiet, ordinary, and emotionally understated.\n\nSpoken Chinese dialogue is audio only and is never visualized as written text. Absolutely no subtitles, captions, speech bubbles, typography, written dialogue, text overlays, title cards, logos, or readable text. No background music.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Xiaoman's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.\n<Subject 2> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Taozi's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.\n<Picture 5> (used as the first frame of [Shot 1]): fully_preserved - the previous clip's final visual state is used as the exact opening state of this clip.\n\ndetailed_description:\nThe video begins exactly from <Picture 5>. For the first brief moment, preserve the frame without noticeable movement. The characters must not suddenly change pose, position, scale, facial expression, or clothing. The environment and camera framing must remain identical to the reference frame.\n\nThe apartment background remains realistic and photographic. The characters remain clearly hand-drawn 2D figures with clean dark outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble. Animation is limited and simple.\n\nAll Chinese dialogue is spoken and audible only. Never display dialogue as subtitles, captions, written Chinese, speech bubbles, floating text, typography, or any other graphic text.\n\n[Shot 1] The video starts from the exact state shown in <Picture 5>. Xiaoman looks toward Taozi and answers calmly, <d>[Chinese] 我也吃。</d> He gives a very small nod toward the dining table.\n\n[Shot 2] At 00:03.300, both characters make only very small movements toward the table. Xiaoman pulls out a chair with one simple hand motion and sits down. Taozi sits opposite him. The movement should resemble limited 2D hand-drawn animation with clear pose changes, not continuous realistic 3D motion. The camera remains nearly static with an extremely subtle slow Push In.\n\n[Shot 3] At 00:06.500, both characters settle into a quiet seated pose. Xiaoman looks down toward the food. Taozi looks briefly at Xiaoman. Neither character speaks. Hold the final composition steadily for the final moment.\n\nEnd on a clean realistic apartment composition with the two hand-drawn characters sitting quietly together. This final frame should also be visually stable and suitable for extraction as a future continuation reference.\n\noverall_soundscape:\nNatural apartment room tone, faint ventilation hum, subtle chair movement, soft table and fabric sounds, distant nighttime city ambience. Dialogue remains clear and natural.\n\nnon_diegetic_music:\nN/A"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Input Text (Prompt)"
+    }
+  },
+  "139": {
+    "inputs": {
+      "image": "桃子1.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "145": {
+    "inputs": {
+      "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 0.75,
+      "model": [
+        "127",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA加载器（仅模型）"
+    }
+  },
+  "147": {
+    "inputs": {
+      "sigmas": "1, .9882, .973, .9524, .9231, .878, .8, .6316, .4737, .1579, 0 "
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "自定义Sigmas"
+    }
+  },
+  "148": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "AnimateDiff",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "122",
+        0
+      ],
+      "audio": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "Video Combine 🎥🅥🅗🅢"
+    }
+  },
+  "150": {
+    "inputs": {
+      "max_resolution": 1024,
+      "jpeg_quality": 80,
+      "suppress_default_preview": true,
+      "preview_frames": [
+        "131",
+        1
+      ],
+      "preview_fps": 8,
+      "tiny_vae": "taeh3.safetensors",
+      "model": [
+        "165",
+        0
+      ]
+    },
+    "class_type": "ModelPreviewOverrideKJ",
+    "_meta": {
+      "title": "Model Preview Override"
+    }
+  },
+  "156": {
+    "inputs": {
+      "attention": "comfy kitchen attention",
+      "model": [
+        "145",
+        0
+      ]
+    },
+    "class_type": "ModelAttentionBackend",
+    "_meta": {
+      "title": "模型注意力后端"
+    }
+  },
+  "160": {
+    "inputs": {
+      "scheduler": "beta",
+      "steps": 30,
+      "denoise": 1,
+      "model": [
+        "150",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "基本调度器"
+    }
+  },
+  "165": {
+    "inputs": {
+      "selection": "sol-attn",
+      "selection.tau": 1.3,
+      "start_percent": 0.2,
+      "end_percent": 1,
+      "dense_blocks": "",
+      "min_tokens": 12288,
+      "extra_tokens": 256,
+      "sink_conditioning": "exact_kv_and_rows",
+      "verbose": true,
+      "model": [
+        "156",
+        0
+      ]
+    },
+    "class_type": "BlockSparseAttention",
+    "_meta": {
+      "title": "模型稀疏注意力"
+    }
+  }
+}
