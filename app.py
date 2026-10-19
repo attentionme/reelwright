@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+logger = logging.getLogger(__name__)
 
 from openai import AsyncOpenAI
 
@@ -27,16 +28,59 @@ DEFAULT_CONFIG = {
     "active_provider": "deepseek",
     "providers": {
         "deepseek": {
+            "display_name": "DeepSeek",
             "base_url": "https://api.deepseek.com",
-            "model": "deepseek-flash",
+            "models": ["deepseek-flash", "deepseek-v4-pro"],
+            "default_model": "deepseek-flash",
             "api_key": "",
-        }
+        },
+        "doubao": {
+            "display_name": "豆包（火山方舟）",
+            "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+            "models": ["doubao-seed-1-6-250615"],
+            "default_model": "doubao-seed-1-6-250615",
+            "api_key": "",
+        },
+        "qwen": {
+            "display_name": "通义千问（阿里云百炼）",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "models": ["qwen-plus", "qwen-max"],
+            "default_model": "qwen-plus",
+            "api_key": "",
+        },
+        "kimi": {
+            "display_name": "Kimi（月之暗面）",
+            "base_url": "https://api.moonshot.cn/v1",
+            "models": ["kimi-k2-0905-preview"],
+            "default_model": "kimi-k2-0905-preview",
+            "api_key": "",
+        },
+        "zhipu": {
+            "display_name": "智谱 GLM",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+            "models": ["glm-4.6", "glm-4.5-air"],
+            "default_model": "glm-4.6",
+            "api_key": "",
+        },
+        "openai": {
+            "display_name": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "models": ["gpt-5.2", "gpt-5.2-mini"],
+            "default_model": "gpt-5.2",
+            "api_key": "",
+        },
+        "claude": {
+            "display_name": "Anthropic Claude（OpenAI 兼容层）",
+            "base_url": "https://api.anthropic.com/v1/",
+            "models": ["claude-sonnet-4-5-20250929"],
+            "default_model": "claude-sonnet-4-5-20250929",
+            "api_key": "",
+        },
     },
 }
 
-
 def _read_config() -> dict:
-    """读取 config.json，并与默认结构合并。读取失败时回退到默认配置。"""
+    """读取 config.json，与默认结构逐 provider 深度合并。读取失败时回退到默认配置。"""
 
     if not CONFIG_PATH.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
@@ -45,23 +89,34 @@ def _read_config() -> dict:
         with CONFIG_PATH.open("r", encoding="utf-8-sig") as f:
             data = json.load(f)
     except Exception:
-        logging.exception("读取 config.json 失败，使用默认配置")
+        logger.exception("读取 config.json 失败，使用默认配置")
         return copy.deepcopy(DEFAULT_CONFIG)
 
     merged = copy.deepcopy(DEFAULT_CONFIG)
 
-    if isinstance(data, dict):
-        merged.update(data)
+    if not isinstance(data, dict):
+        return merged
 
-        data_providers = data.get("providers")
-        if isinstance(data_providers, dict):
-            providers = merged.setdefault("providers", {})
-            for name, provider_data in data_providers.items():
-                if isinstance(provider_data, dict):
-                    providers.setdefault(name, {}).update(provider_data)
+    # 顶层字段（active_provider 等）直接覆盖
+    for key, value in data.items():
+        if key == "providers":
+            continue
+        merged[key] = value
+
+    # providers 逐项深度合并：保留默认字段，用用户值覆盖
+    data_providers = data.get("providers")
+    if isinstance(data_providers, dict):
+        merged_providers = merged.setdefault("providers", {})
+        for name, provider_data in data_providers.items():
+            if not isinstance(provider_data, dict):
+                continue
+            existing = merged_providers.get(name)
+            if isinstance(existing, dict):
+                existing.update(provider_data)
+            else:
+                merged_providers[name] = dict(provider_data)
 
     return merged
-
 
 def _write_config(config: dict) -> None:
     """原子写入 config.json，避免半写文件。"""
@@ -73,6 +128,99 @@ def _write_config(config: dict) -> None:
 
     tmp_path.replace(CONFIG_PATH)
 
+def _resolve_provider_config(config, provider_name=None) -> dict:
+    """
+    从 config 中解析指定 provider 的完整配置。
+
+    纯函数：不访问文件，不访问网络。
+
+    查找顺序：
+        1. 显式传入的 provider_name（若存在）
+        2. config["active_provider"]
+        3. "deepseek"
+
+    api_key 不回退：缺失即返回空字符串，由调用方决定如何处理。
+
+    返回字典字段：
+        name, display_name, base_url, model, models, api_key, configured
+        configured 表示 base_url 与 model 是否均非空。
+    """
+
+    if not isinstance(config, dict):
+        config = {}
+
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+
+    default_cfg = DEFAULT_CONFIG["providers"]["deepseek"]
+
+    candidates = []
+    if isinstance(provider_name, str) and provider_name.strip():
+        candidates.append(provider_name.strip())
+    active = config.get("active_provider")
+    if isinstance(active, str) and active.strip():
+        candidates.append(active.strip())
+    candidates.append("deepseek")
+
+    chosen_name = candidates[-1]
+    for name in candidates:
+        if name in providers:
+            chosen_name = name
+            break
+
+    raw = providers.get(chosen_name)
+    if not isinstance(raw, dict):
+        raw = {}
+
+    is_default_provider = chosen_name == "deepseek"
+
+    base_url = raw.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        base_url = default_cfg["base_url"] if is_default_provider else ""
+
+    display_name = raw.get("display_name")
+    if not isinstance(display_name, str) or not display_name.strip():
+        display_name = chosen_name
+
+    # model 解析优先级：default_model → models[0] → 旧字段 model → 默认
+    model = raw.get("default_model")
+    if not isinstance(model, str) or not model.strip():
+        models_field = raw.get("models")
+        if (
+            isinstance(models_field, list)
+            and models_field
+            and isinstance(models_field[0], str)
+        ):
+            model = models_field[0]
+        else:
+            legacy = raw.get("model")
+            if isinstance(legacy, str) and legacy.strip():
+                model = legacy
+            elif is_default_provider:
+                model = default_cfg["default_model"]
+            else:
+                model = ""
+
+    models_list = raw.get("models")
+    if not isinstance(models_list, list) or not models_list:
+        models_list = [model] if model else []
+
+    api_key = raw.get("api_key")
+    if not isinstance(api_key, str):
+        api_key = ""
+
+    configured = bool(base_url and model)
+
+    return {
+        "name": chosen_name,
+        "display_name": display_name,
+        "base_url": base_url,
+        "model": model,
+        "models": models_list,
+        "api_key": api_key,
+        "configured": configured,
+    }
 
 def _save_api_key_from_ui(api_key: str) -> str:
     """把 UI 中输入的 API Key 保存到当前 active_provider。"""
@@ -86,27 +234,24 @@ def _save_api_key_from_ui(api_key: str) -> str:
 
     _write_config(config)
 
-    return f"已保存到 config.json，当前平台：{active_provider}"
+    resolved = _resolve_provider_config(config, active_provider)
+    return f"已保存到 config.json，当前平台：{resolved['display_name']}"
+
 
 def _load_default_api_key() -> str:
     """按 config.json > 环境变量 > .env 的顺序读取 API Key。"""
 
-    # 1. config.json
     config = _read_config()
-    active_provider = config.get("active_provider", "deepseek")
-    provider = config.get("providers", {}).get(active_provider, {})
-    key = (provider.get("api_key") or "").strip()
+    provider = _resolve_provider_config(config, config.get("active_provider"))
+    key = provider["api_key"].strip()
 
     if key:
         return key
 
-    # 2. 环境变量
     key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-
     if key:
         return key
 
-    # 3. .env 文件
     env_path = Path(__file__).with_name(".env")
 
     if not env_path.exists():
@@ -292,14 +437,33 @@ INSTRUCTIONS = "\n\n".join(
 
 
 # 根据界面输入的 API Key 创建 Agent
-def build_agent(api_key: str):
+def build_agent(api_key_override: str = ""):
+    config = _read_config()
+    provider = _resolve_provider_config(config, config.get("active_provider"))
+
+    if not provider["configured"]:
+        raise ValueError(
+            f"平台 {provider['display_name']} 的配置不完整："
+            f"base_url={'缺失' if not provider['base_url'] else '已配置'}，"
+            f"model={'缺失' if not provider['model'] else '已配置'}。"
+            "请在 config.json 中补全该平台的配置后重试。"
+        )
+
+    api_key = (api_key_override or "").strip() or provider["api_key"]
+
+    if not api_key:
+        raise ValueError(
+            f"平台 {provider['display_name']} 未配置 API Key。"
+            "请在“模型设置”中输入 Key，或写入 config.json 后重试。"
+        )
+
     client = AsyncOpenAI(
-        api_key=api_key.strip(),
-        base_url="https://api.deepseek.com",
+        api_key=api_key,
+        base_url=provider["base_url"],
     )
 
     model = OpenAIChatCompletionsModel(
-        model="deepseek-flash",
+        model=provider["model"],
         openai_client=client,
     )
 
@@ -316,6 +480,63 @@ def build_agent(api_key: str):
     )
 
     return agent, client
+
+def _format_request_error(exc: Exception, provider: dict) -> str:
+    """
+    把请求异常转换为面向用户的中文提示。
+
+    纯函数：不访问文件，不访问网络。
+    """
+
+    display_name = provider.get("display_name") or "当前平台"
+    base_url = provider.get("base_url") or ""
+    model = provider.get("model") or ""
+
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+
+    if status_code in (401, 403):
+        return (
+            f"{display_name} 拒绝了本次请求（HTTP {status_code}）。"
+            "API Key 可能无效、已过期，或不属于当前平台。"
+            "请检查“模型设置”中的 Key，并确认 config.json 中 "
+            "active_provider 与 Key 所属平台一致。"
+        )
+
+    if status_code == 404:
+        return (
+            f"{display_name} 返回 404：模型或接口地址不存在。"
+            f"请检查 config.json 中 {display_name} 的 base_url"
+            f"（当前 {base_url}）与 model（当前 {model}）是否正确。"
+        )
+
+    if status_code == 429:
+        return f"{display_name} 返回 429：请求频率或额度受限，请稍后重试。"
+
+    if isinstance(status_code, int) and status_code >= 500:
+        return f"{display_name} 返回 {status_code}：服务端临时故障，请稍后重试。"
+
+    message_lower = str(exc).lower()
+
+    if "timeout" in message_lower or "timed out" in message_lower:
+        return (
+            f"无法在限定时间内连接到 {display_name}（{base_url}）。"
+            "请检查网络、代理或防火墙设置。"
+        )
+
+    if "connection" in message_lower or "connect" in message_lower:
+        return (
+            f"无法连接到 {display_name}（{base_url}）。"
+            "请检查网络是否通畅，代理是否正确。"
+        )
+
+    return (
+        f"请求失败（{type(exc).__name__}）。当前平台：{display_name}。"
+        "请检查 API Key、模型名称、网络连接和账户额度，"
+        "或查看启动终端的详细日志。"
+    )
 
 
 def _extract_history_lines(history) -> list:
@@ -371,13 +592,12 @@ def _extract_history_lines(history) -> list:
 
 # Gradio 会把用户问题、对话历史和密钥传给这个函数
 async def chat(message, history, api_key):
-    if not api_key or not api_key.strip():
-        return "请先在“模型设置”中输入 DeepSeek API Key。"
-
-    agent, client = build_agent(api_key)
+    try:
+        agent, client = build_agent(api_key or "")
+    except ValueError as exc:
+        return str(exc)
 
     try:
-        # 将最近的聊天记录整理成上下文
         history_lines = _extract_history_lines(history)
 
         if history_lines:
@@ -390,27 +610,32 @@ async def chat(message, history, api_key):
         else:
             prompt = message
 
-        # 运行 Agent，等待模型回答或调用工具
         result = await Runner.run(agent, prompt)
 
         return result.final_output
 
     except Exception as exc:
-        # 不打印 API Key，也不把异常细节直接返回到聊天窗口
-        print(f"请求失败，错误类型：{type(exc).__name__}")
-        return (
-            "请求失败。请检查 API Key、模型名称、网络连接和账户额度。"
-            "具体排查时请查看启动终端。"
+        logger.error(
+            "请求失败：%s: %s",
+            type(exc).__name__,
+            exc,
         )
+        provider = _resolve_provider_config(_read_config(), None)
+        return _format_request_error(exc, provider)
 
     finally:
-        # 关闭本次请求使用的客户端
         await client.close()
 
 
 # 密钥输入框使用密码显示形式
+_startup_config = _read_config()
+_active_provider_config = _resolve_provider_config(
+    _startup_config,
+    _startup_config.get("active_provider", "deepseek"),
+)
+
 key_input = gr.Textbox(
-    label="DeepSeek API Key",
+    label=f"{_active_provider_config['display_name']} API Key",
     type="password",
     placeholder="在这里输入你的 API Key",
     value=DEFAULT_API_KEY,
