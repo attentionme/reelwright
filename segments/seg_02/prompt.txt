@@ -1,0 +1,37 @@
+subject_definitions:
+<Subject 1> is Xiaoman, the young man from <Picture 1>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. He remains a quiet, thin young Chinese man with a clearly 2D hand-drawn visual language, clean dark ink outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble.
+
+<Subject 2> is Taozi, the young woman from <Picture 2>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. She remains a natural young Chinese woman with clear hand-drawn outlines, flat graphic colors, simplified anatomy, and restrained facial animation.
+
+<Picture 3> is the exact final frame of the previous 12-second video clip and the required first frame of [Shot 1] in this target video. It contains the same apartment environment, character positions, poses, facial expressions, lighting, framing, and visual composition from the end of the previous clip. Use <Picture 3> as the strict visual starting state.
+
+summary:
+[keyframe completion + reference generation] The target video is the final 9-second continuation of the previous clip and begins exactly from <Picture 3>, the previous clip's final frame. The first frame must preserve the previous visual state with no reinterpretation. Xiaoman answers Taozi and both characters simply settle down to eat. The final moment should feel quiet, ordinary, and emotionally understated.
+
+Spoken Chinese dialogue is audio only and is never visualized as written text. Absolutely no subtitles, captions, speech bubbles, typography, written dialogue, text overlays, title cards, logos, or readable text. No background music.
+
+retention_analysis:
+<Subject 1> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Xiaoman's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.
+<Subject 2> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Taozi's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.
+<Picture 3> (used as the first frame of [Shot 1]): fully_preserved - the previous clip's final visual state is used as the exact opening state of this clip.
+
+detailed_description:
+The video begins exactly from <Picture 3>. For the first brief moment, preserve the frame without noticeable movement. The characters must not suddenly change pose, position, scale, facial expression, or clothing. The environment and camera framing must remain identical to the reference frame.
+
+The apartment background remains realistic and photographic. The characters remain clearly hand-drawn 2D figures with clean dark outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble. Animation is limited and simple.
+
+All Chinese dialogue is spoken and audible only. Never display dialogue as subtitles, captions, written Chinese, speech bubbles, floating text, typography, or any other graphic text.
+
+[Shot 1] The video starts from the exact state shown in <Picture 3>: both characters are already seated at the dining table. Xiaoman looks down at his food, picks up his chopsticks, and takes a bite. Taozi watches him quietly.
+
+[Shot 2] At 00:03.300, both characters continue eating in a quiet, ordinary rhythm. Xiaoman reaches for a dish. Taozi takes a sip of water. The movement should resemble limited 2D hand-drawn animation with clear pose changes, not continuous realistic 3D motion. The camera remains nearly static with an extremely subtle slow Push In.
+
+[Shot 3] At 00:06.500, both characters settle into a quiet seated pose. Xiaoman looks toward Taozi. Taozi meets his gaze briefly. Neither character speaks. Hold the final composition steadily for the final moment.
+
+End on a clean realistic apartment composition with the two hand-drawn characters sitting quietly together.
+
+overall_soundscape:
+Natural apartment room tone, faint ventilation hum, subtle chair movement, soft table and fabric sounds, distant nighttime city ambience. Dialogue remains clear and natural.
+
+non_diegetic_music:
+N/A

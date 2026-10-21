@@ -100,7 +100,12 @@ def parse_args():
                         help="要跑的次数（未指定 --seeds 时使用）")
     parser.add_argument("--seeds", type=str, default="",
                         help="逗号分隔的 seed 列表，指定后忽略 --count")
-    parser.add_argument("--prompt-file", default="subject_definitions.txt")
+    parser.add_argument("--segment", type=str, default="",
+                        help="片段名，如 seg_01。指定后从 segments/<name>/ 读 prompt 和 refs")
+    parser.add_argument("--prompt-file", default="subject_definitions.txt",
+                        help="仅在未指定 --segment 时使用")
+    parser.add_argument("--ref-images", type=str, default="",
+                        help="仅在未指定 --segment 时使用")
     parser.add_argument("--profile", default="workflow_profile.json")
     parser.add_argument("--log", default="batch_log.csv")
     parser.add_argument("--batch-root", default="batches",
@@ -110,9 +115,47 @@ def parse_args():
     parser.add_argument("--megapixels", type=float, default=1.0)
     parser.add_argument("--force", action="store_true",
                         help="强制重跑，即使 seed 已在日志里成功过")
-    parser.add_argument("--ref-images", type=str, default="",
-                        help="逗号分隔的参考图文件名，对应 ComfyUI input 目录")
     return parser.parse_args()
+
+
+def load_segment(segment_name: str):
+    """从 segments/<name>/ 读取 prompt 和 refs。"""
+    seg_dir = Path("segments") / segment_name
+    if not seg_dir.exists():
+        raise SystemExit(f"片段目录不存在：{seg_dir}")
+
+    prompt_file = seg_dir / "prompt.txt"
+    if not prompt_file.exists():
+        raise SystemExit(f"片段缺少 prompt.txt：{prompt_file}")
+    prompt_text = prompt_file.read_text(encoding="utf-8-sig")
+    if not prompt_text.strip():
+        raise SystemExit(f"prompt 文件是空的：{prompt_file}")
+
+    refs = []
+    refs_file = seg_dir / "refs.txt"
+    if refs_file.exists():
+        for line in refs_file.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            refs.append(line)
+
+    return prompt_text, refs
+
+
+def resolve_inputs(args):
+    """统一处理 --segment 和 --prompt-file/--ref-images 两条路径。"""
+    if args.segment:
+        prompt_text, refs = load_segment(args.segment)
+        return prompt_text, refs, args.segment
+    prompt_text = Path(args.prompt_file).read_text(encoding="utf-8-sig")
+    if not prompt_text.strip():
+        raise SystemExit(
+            f"prompt 文件是空的：{args.prompt_file}。"
+            "请先填入内容再跑，否则会覆盖工作流里的原始提示词。"
+        )
+    refs = [s.strip() for s in args.ref_images.split(",") if s.strip()]
+    return prompt_text, refs, ""
 
 
 def resolve_seeds(args):
@@ -135,9 +178,10 @@ def load_done_seeds(log_file):
     return done
 
 
-def make_batch_dir(root: str) -> Path:
+def make_batch_dir(root: str, segment: str) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = Path(root) / stamp
+    prefix = f"{segment}_" if segment else ""
+    path = Path(root) / f"{prefix}{stamp}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -263,13 +307,7 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 
 def main():
     args = parse_args()
-    prompt_text = Path(args.prompt_file).read_text(encoding="utf-8-sig")
-
-    if not prompt_text.strip():
-        raise SystemExit(
-            f"prompt 文件是空的：{args.prompt_file}。"
-            "请先填入内容再跑，否则会覆盖工作流里的原始提示词。"
-        )
+    prompt_text, ref_images, segment = resolve_inputs(args)
 
     seeds = resolve_seeds(args)
     done_seeds = set() if args.force else load_done_seeds(args.log)
@@ -277,13 +315,13 @@ def main():
     log_path = Path(args.log)
     write_header = not log_path.exists()
 
-    batch_dir = make_batch_dir(args.batch_root)
+    batch_dir = make_batch_dir(args.batch_root, segment)
     tail_dir = batch_dir / "tail_frames"
     tail_dir.mkdir(exist_ok=True)
 
-    ref_images = [s.strip() for s in args.ref_images.split(",") if s.strip()]
-
     print(f"计划跑 {len(seeds)} 次，已完成 {len(done_seeds & set(seeds))} 次")
+    if segment:
+        print(f"片段：{segment}")
     print(f"prompt 长度：{len(prompt_text)} 字符")
     print(f"参考图：{ref_images if ref_images else '（使用工作流默认）'}")
     print(f"批次目录：{batch_dir.resolve()}")
@@ -294,7 +332,7 @@ def main():
         writer = csv.writer(f)
         if write_header:
             writer.writerow([
-                "timestamp", "seed", "duration", "aspect_ratio",
+                "timestamp", "segment", "seed", "duration", "aspect_ratio",
                 "megapixels", "status", "output_path", "file_size",
                 "elapsed_seconds", "error",
             ])
@@ -325,13 +363,12 @@ def main():
                 batch_file = batch_dir / f"seed_{seed}{path.suffix}"
                 shutil.copy2(path, batch_file)
 
-                # 抽取尾帧
                 tail_path = tail_dir / f"seed_{seed}.png"
                 extract_last_frame(path, tail_path)
 
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    seed, args.duration, args.aspect_ratio, args.megapixels,
+                    segment, seed, args.duration, args.aspect_ratio, args.megapixels,
                     "ok", str(path), path.stat().st_size,
                     round(elapsed, 1), "",
                 ])
@@ -350,7 +387,7 @@ def main():
                 elapsed = time.time() - start
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    seed, args.duration, args.aspect_ratio, args.megapixels,
+                    segment, seed, args.duration, args.aspect_ratio, args.megapixels,
                     "error", "", "", round(elapsed, 1), str(e),
                 ])
                 f.flush()
