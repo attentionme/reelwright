@@ -31,3 +31,4 @@ config.json
 batch_log.csv
 batches/
 final/
+review_marks.json
