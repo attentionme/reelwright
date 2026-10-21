@@ -69,17 +69,44 @@ class WorkflowAdapter:
             f"等待 {timeout_seconds} 秒仍未完成，prompt_id={prompt_id}"
         )
 
-    def find_output(self, wait_seconds: int = 10) -> Path:
-        """在 output_dir 下按本次 run 的 prefix 找文件。"""
+    def find_output(self, wait_seconds: int = 60) -> Path:
+        """
+        在 output_dir 下按本次 run 的 prefix 找最终视频文件。
+
+        VHS_VideoCombine 会先落 preview .png，再异步用 ffmpeg 编码 .mp4，
+        因此不能见到任何文件就返回，必须等到 mp4 出现。
+
+        优先级：
+            1. *-audio.mp4   （合并音频后的完整视频）
+            2. *.mp4
+            3. 其它          （超时兜底，通常是 .png 预览图）
+        """
         output_dir = Path(self.profile["output_dir"])
         prefix = self._unique_prefix()
 
         start = time.time()
+        last_seen = []
+
         while time.time() - start < wait_seconds:
             matches = sorted(output_dir.rglob(f"{prefix}*"))
-            if matches:
-                return matches[-1]
+            last_seen = matches
+
+            audio_mp4 = [
+                p for p in matches if p.name.endswith("-audio.mp4")
+            ]
+            if audio_mp4:
+                return audio_mp4[0]
+
+            mp4s = [
+                p for p in matches if p.suffix.lower() == ".mp4"
+            ]
+            if mp4s:
+                return mp4s[0]
+
             time.sleep(1)
+
+        if last_seen:
+            return last_seen[0]
 
         raise FileNotFoundError(
             f"在 {output_dir} 下没找到 {prefix}* 的文件。"
