@@ -40,6 +40,39 @@ class WorkflowAdapter:
         for role, value in kwargs.items():
             self.set(role, value)
 
+    def set_reference_images(self, image_names: list):
+        """
+        动态设置参考图。
+
+        image_names: 文件名列表，对应 ComfyUI input 目录下的文件。
+        会先清除工作流里已有的 ref_image_* 连接，再按顺序创建新的 LoadImage 节点并接入。
+        """
+        ref_node_id = None
+        for nid, node in self.workflow.items():
+            if node.get("class_type") == "MiniMaxH3ReferenceToVideo":
+                ref_node_id = nid
+                break
+
+        if ref_node_id is None:
+            raise KeyError("工作流中找不到 MiniMaxH3ReferenceToVideo 节点")
+
+        inputs = self.workflow[ref_node_id].setdefault("inputs", {})
+
+        # 清除旧的 ref_image_* 连接
+        for key in list(inputs.keys()):
+            if key.startswith("ref_images.ref_image_"):
+                del inputs[key]
+
+        # 为每个图片创建 LoadImage 节点并连接
+        for i, image_name in enumerate(image_names):
+            load_node_id = f"dyn_load_ref_{i}"
+            self.workflow[load_node_id] = {
+                "inputs": {"image": image_name},
+                "class_type": "LoadImage",
+                "_meta": {"title": f"动态参考图 {i}"},
+            }
+            inputs[f"ref_images.ref_image_{i}"] = [load_node_id, 0]
+
     def _unique_prefix(self) -> str:
         return f"h3_{self.run_id}"
 
@@ -72,9 +105,6 @@ class WorkflowAdapter:
     def find_output(self, wait_seconds: int = 60) -> Path:
         """
         在 output_dir 下按本次 run 的 prefix 找最终视频文件。
-
-        VHS_VideoCombine 会先落 preview .png，再异步用 ffmpeg 编码 .mp4，
-        因此不能见到任何文件就返回，必须等到 mp4 出现。
 
         优先级：
             1. *-audio.mp4   （合并音频后的完整视频）

@@ -3,6 +3,7 @@ import csv
 import html
 import random
 import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -109,6 +110,8 @@ def parse_args():
     parser.add_argument("--megapixels", type=float, default=1.0)
     parser.add_argument("--force", action="store_true",
                         help="强制重跑，即使 seed 已在日志里成功过")
+    parser.add_argument("--ref-images", type=str, default="",
+                        help="逗号分隔的参考图文件名，对应 ComfyUI input 目录")
     return parser.parse_args()
 
 
@@ -137,6 +140,16 @@ def make_batch_dir(root: str) -> Path:
     path = Path(root) / stamp
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def extract_last_frame(video_path: Path, output_path: Path):
+    """用 ffmpeg 抽取视频的最后一帧。"""
+    subprocess.run([
+        "ffmpeg", "-y", "-sseof", "-1",
+        "-i", str(video_path),
+        "-update", "1",
+        str(output_path),
+    ], check=True, capture_output=True)
 
 
 def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> Path:
@@ -265,8 +278,14 @@ def main():
     write_header = not log_path.exists()
 
     batch_dir = make_batch_dir(args.batch_root)
+    tail_dir = batch_dir / "tail_frames"
+    tail_dir.mkdir(exist_ok=True)
+
+    ref_images = [s.strip() for s in args.ref_images.split(",") if s.strip()]
+
     print(f"计划跑 {len(seeds)} 次，已完成 {len(done_seeds & set(seeds))} 次")
     print(f"prompt 长度：{len(prompt_text)} 字符")
+    print(f"参考图：{ref_images if ref_images else '（使用工作流默认）'}")
     print(f"批次目录：{batch_dir.resolve()}")
 
     records = []
@@ -297,11 +316,18 @@ def main():
                     aspect_ratio=args.aspect_ratio,
                     megapixels=args.megapixels,
                 )
+                if ref_images:
+                    adapter.set_reference_images(ref_images)
+
                 path = adapter.run_once()
                 elapsed = time.time() - start
 
                 batch_file = batch_dir / f"seed_{seed}{path.suffix}"
                 shutil.copy2(path, batch_file)
+
+                # 抽取尾帧
+                tail_path = tail_dir / f"seed_{seed}.png"
+                extract_last_frame(path, tail_path)
 
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
@@ -318,6 +344,7 @@ def main():
                     "elapsed": elapsed, "error": "",
                 })
                 print(f"[{i}/{len(seeds)}] [ok] seed={seed} -> {batch_file.name} ({elapsed:.0f}s)")
+                print(f"    尾帧：{tail_path.name}")
 
             except Exception as e:
                 elapsed = time.time() - start
