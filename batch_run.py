@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from comfy_adapter import WorkflowAdapter
+from quality_check import check_batch
 
 
 def parse_args():
@@ -57,7 +58,7 @@ def make_batch_dir(root: str) -> Path:
 
 
 def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> Path:
-    """生成一个可直接用浏览器打开的审片页面。"""
+    """生成一个可直接用浏览器打开的审片页面。records 应已按可疑优先排序。"""
     items_html = []
     for r in records:
         if r["status"] != "ok":
@@ -70,21 +71,44 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 
         rel = Path(r["batch_file"]).name
         size_mb = r["file_size"] / 1024 / 1024
+        q = r.get("quality", {})
+        verdict = q.get("verdict", "unknown")
+        reasons = q.get("reasons", [])
+        metrics = q.get("metrics", {})
+
+        badge_class = {"pass": "badge-pass", "suspect": "badge-suspect"}.get(verdict, "badge-unknown")
+        badge_text = {"pass": "通过", "suspect": "可疑"}.get(verdict, verdict)
+
+        reasons_html = ""
+        if reasons:
+            reasons_html = '<div class="reasons">' + "<br>".join(
+                html.escape(x) for x in reasons
+            ) + "</div>"
+
+        metrics_str = ""
+        if metrics.get("duration") is not None:
+            metrics_str = (
+                f' · {metrics["duration"]:.1f}s'
+                f' · {metrics.get("fps", "?")}fps'
+            )
+
         items_html.append(
             f'<div class="item">'
+            f'<span class="badge {badge_class}">{badge_text}</span>'
             f'<video src="{html.escape(rel)}" controls preload="metadata"></video>'
-            f'<div class="meta">seed={r["seed"]} · {r["elapsed"]:.0f}s · {size_mb:.2f}MB</div>'
+            f'<div class="meta">seed={r["seed"]} · {r["elapsed"]:.0f}s · {size_mb:.2f}MB{metrics_str}</div>'
+            f'{reasons_html}'
             f'<div class="path">{html.escape(rel)}</div>'
             f'</div>'
         )
 
     if not items_html:
         items_html.append(
-            '<div class="item error"><div class="meta">'
-            '本批次没有生成任何视频。</div></div>'
+            '<div class="item error"><div class="meta">本批次没有生成任何视频。</div></div>'
         )
 
     ok_count = len([r for r in records if r["status"] == "ok"])
+    suspect_count = len([r for r in records if r.get("quality", {}).get("verdict") == "suspect"])
 
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -94,17 +118,24 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 <style>
   body {{ background:#1a1a1a; color:#e0e0e0; font-family:-apple-system,"Segoe UI",sans-serif; margin:0; padding:24px; }}
   h1 {{ font-size:18px; font-weight:500; margin:0 0 8px; }}
-  .prompt {{ font-size:12px; color:#888; margin-bottom:24px; white-space:pre-wrap; max-height:120px; overflow:auto; background:#111; padding:12px; border-radius:6px; }}
+  .summary {{ font-size:13px; color:#888; margin-bottom:16px; }}
+  .prompt {{ font-size:12px; color:#888; margin-bottom:24px; white-space:pre-wrap; max-height:100px; overflow:auto; background:#111; padding:12px; border-radius:6px; }}
   .grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:20px; }}
-  .item {{ background:#222; border-radius:8px; padding:12px; }}
+  .item {{ background:#222; border-radius:8px; padding:12px; position:relative; }}
   .item.error {{ color:#c66; font-size:13px; }}
+  .badge {{ position:absolute; top:20px; right:20px; font-size:11px; padding:3px 8px; border-radius:4px; font-weight:500; z-index:1; }}
+  .badge-pass {{ background:#2d4a2d; color:#8f8; }}
+  .badge-suspect {{ background:#4a2d2d; color:#f99; }}
+  .badge-unknown {{ background:#333; color:#aaa; }}
   video {{ width:100%; border-radius:4px; display:block; background:#000; }}
   .meta {{ font-size:13px; color:#aaa; margin-top:8px; }}
+  .reasons {{ font-size:12px; color:#f99; margin-top:6px; line-height:1.5; }}
   .path {{ font-size:11px; color:#666; margin-top:4px; font-family:monospace; word-break:break-all; }}
 </style>
 </head>
 <body>
-<h1>审片 · {batch_dir.name} · 共 {ok_count} 个成功</h1>
+<h1>审片 · {batch_dir.name}</h1>
+<div class="summary">成功 {ok_count} 个 · 可疑 {suspect_count} 个 · 可疑排在前面</div>
 <div class="prompt">prompt 预览：{html.escape(prompt_preview)}</div>
 <div class="grid">
 {"".join(items_html)}
@@ -169,7 +200,6 @@ def main():
                 path = adapter.run_once()
                 elapsed = time.time() - start
 
-                # 复制到批次目录，文件名带 seed 和扩展名
                 batch_file = batch_dir / f"seed_{seed}{path.suffix}"
                 shutil.copy2(path, batch_file)
 
@@ -205,12 +235,24 @@ def main():
                 })
                 print(f"[{i}/{len(seeds)}] [error] seed={seed}: {e}")
 
+    if records:
+        print("\n正在做技术质量检测...")
+        records = check_batch(records, args.duration)
+
+        suspects = [r for r in records if r.get("quality", {}).get("verdict") == "suspect"]
+        if suspects:
+            print(f"发现 {len(suspects)} 个可疑视频：")
+            for r in suspects:
+                print(f"  seed={r['seed']}: {'; '.join(r['quality']['reasons'])}")
+        else:
+            print("所有成功视频都通过了技术检测。")
+
     preview = prompt_text[:200].replace("\n", " ")
     review_path = render_review_html(batch_dir, records, preview)
     print(f"\n审片页面：{review_path.resolve()}")
 
     if records:
-        print("用浏览器打开这个文件即可一次性查看本批视频。")
+        print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
     else:
         print("本次没有生成任何新视频（全部被跳过）。加 --force 可强制重跑。")
 
