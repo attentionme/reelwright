@@ -11,6 +11,88 @@ from comfy_adapter import WorkflowAdapter
 from quality_check import check_batch
 
 
+REVIEW_SCRIPT = """
+<script>
+(function() {
+  var STORAGE_KEY = 'review_marks_v1';
+
+  function loadMarks() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveMarks(marks) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(marks));
+  }
+
+  function refreshButtons() {
+    var marks = loadMarks();
+    document.querySelectorAll('.mark-btn').forEach(function(btn) {
+      var key = btn.dataset.batch + '/' + btn.dataset.seed;
+      var type = btn.dataset.type;
+      if (marks[key] === type) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+    var count = Object.keys(marks).length;
+    var status = document.getElementById('mark-status');
+    if (status) {
+      status.textContent = count > 0 ? ('已标记 ' + count + ' 项') : '';
+    }
+  }
+
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('.mark-btn');
+    if (!btn) return;
+    var key = btn.dataset.batch + '/' + btn.dataset.seed;
+    var type = btn.dataset.type;
+    var marks = loadMarks();
+    if (marks[key] === type) {
+      delete marks[key];
+    } else {
+      marks[key] = type;
+    }
+    saveMarks(marks);
+    refreshButtons();
+  });
+
+  var exportBtn = document.getElementById('export-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', function() {
+      var marks = loadMarks();
+      var liked = [];
+      var rejected = [];
+      Object.keys(marks).forEach(function(k) {
+        if (marks[k] === 'like') liked.push(k);
+        else if (marks[k] === 'reject') rejected.push(k);
+      });
+      var payload = { liked: liked, rejected: rejected };
+      var blob = new Blob(
+        [JSON.stringify(payload, null, 2)],
+        { type: 'application/json' }
+      );
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'review_marks.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }
+
+  refreshButtons();
+})();
+</script>
+"""
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--count", type=int, default=5,
@@ -58,7 +140,7 @@ def make_batch_dir(root: str) -> Path:
 
 
 def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> Path:
-    """生成一个可直接用浏览器打开的审片页面。records 应已按可疑优先排序。"""
+    """生成审片页面，带喜欢/淘汰标记和导出功能。records 应已按可疑优先排序。"""
     items_html = []
     for r in records:
         if r["status"] != "ok":
@@ -98,6 +180,10 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
             f'<video src="{html.escape(rel)}" controls preload="metadata"></video>'
             f'<div class="meta">seed={r["seed"]} · {r["elapsed"]:.0f}s · {size_mb:.2f}MB{metrics_str}</div>'
             f'{reasons_html}'
+            f'<div class="actions">'
+            f'<button class="mark-btn like" data-batch="{batch_dir.name}" data-seed="{r["seed"]}" data-type="like">👍 喜欢</button>'
+            f'<button class="mark-btn reject" data-batch="{batch_dir.name}" data-seed="{r["seed"]}" data-type="reject">👎 淘汰</button>'
+            f'</div>'
             f'<div class="path">{html.escape(rel)}</div>'
             f'</div>'
         )
@@ -118,6 +204,10 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 <style>
   body {{ background:#1a1a1a; color:#e0e0e0; font-family:-apple-system,"Segoe UI",sans-serif; margin:0; padding:24px; }}
   h1 {{ font-size:18px; font-weight:500; margin:0 0 8px; }}
+  .toolbar {{ display:flex; align-items:center; gap:12px; margin:16px 0; }}
+  .toolbar button {{ background:#2a2a2a; color:#e0e0e0; border:1px solid #444; padding:6px 14px; border-radius:4px; cursor:pointer; font-size:13px; }}
+  .toolbar button:hover {{ background:#333; }}
+  #mark-status {{ font-size:13px; color:#8f8; }}
   .summary {{ font-size:13px; color:#888; margin-bottom:16px; }}
   .prompt {{ font-size:12px; color:#888; margin-bottom:24px; white-space:pre-wrap; max-height:100px; overflow:auto; background:#111; padding:12px; border-radius:6px; }}
   .grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:20px; }}
@@ -130,16 +220,26 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
   video {{ width:100%; border-radius:4px; display:block; background:#000; }}
   .meta {{ font-size:13px; color:#aaa; margin-top:8px; }}
   .reasons {{ font-size:12px; color:#f99; margin-top:6px; line-height:1.5; }}
-  .path {{ font-size:11px; color:#666; margin-top:4px; font-family:monospace; word-break:break-all; }}
+  .actions {{ display:flex; gap:8px; margin-top:10px; }}
+  .mark-btn {{ flex:1; background:#2a2a2a; color:#888; border:1px solid #444; padding:6px 10px; border-radius:4px; cursor:pointer; font-size:13px; }}
+  .mark-btn:hover {{ background:#333; }}
+  .mark-btn.like.active {{ background:#2d4a2d; color:#8f8; border-color:#4a6a4a; }}
+  .mark-btn.reject.active {{ background:#4a2d2d; color:#f99; border-color:#6a4a4a; }}
+  .path {{ font-size:11px; color:#666; margin-top:6px; font-family:monospace; word-break:break-all; }}
 </style>
 </head>
 <body>
 <h1>审片 · {batch_dir.name}</h1>
 <div class="summary">成功 {ok_count} 个 · 可疑 {suspect_count} 个 · 可疑排在前面</div>
+<div class="toolbar">
+  <button id="export-btn">导出已选中</button>
+  <span id="mark-status"></span>
+</div>
 <div class="prompt">prompt 预览：{html.escape(prompt_preview)}</div>
 <div class="grid">
 {"".join(items_html)}
 </div>
+{REVIEW_SCRIPT}
 </body>
 </html>
 """
@@ -253,6 +353,7 @@ def main():
 
     if records:
         print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
+        print("在审片页面里可以点『喜欢』或『淘汰』，点『导出已选中』下载 JSON。")
     else:
         print("本次没有生成任何新视频（全部被跳过）。加 --force 可强制重跑。")
 
