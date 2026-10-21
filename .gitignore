@@ -27,3 +27,6 @@ __pycache__/
 .idea/
 
 config.json
+
+batch_log.csv
+batches/
