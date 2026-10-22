@@ -1,7 +1,21 @@
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+
+
+# ── 可选依赖：未安装时静默跳过，不影响主流程 ──
+try:
+    from sead import DEFAULT_MODEL_PATH, SEADDetector
+    _HAS_SEAD = True
+except ImportError:
+    _HAS_SEAD = False
+
+
+# 视觉审核暂时关闭（aigcqa 在 Python 3.14 下无可用 wheel）
+def _check_visual_quality(path: Path) -> dict:
+    return {"verdict": "not_checked", "reasons": ["视觉审核暂未启用"]}
 
 
 def _probe_video(path: Path) -> dict:
@@ -63,8 +77,65 @@ def _probe_video(path: Path) -> dict:
     }
 
 
+def _extract_audio(video_path: Path, audio_path: Path):
+    """用 ffmpeg 提取单声道 16kHz WAV，供 SEAD 使用。"""
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(video_path),
+        "-ac", "1", "-ar", "16000",
+        "-f", "wav", str(audio_path),
+    ], check=True, capture_output=True)
+
+
+def _check_audio_bgm(path: Path) -> dict:
+    """用 SEAD 检测音频中 music 片段占比。"""
+    if not _HAS_SEAD:
+        return {"verdict": "not_checked", "reasons": ["未安装 sead"]}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        audio_path = Path(tmp) / "audio.wav"
+        try:
+            _extract_audio(path, audio_path)
+        except Exception as exc:
+            return {"verdict": "not_checked", "reasons": [f"音频提取失败：{exc}"]}
+
+        try:
+            detector = SEADDetector(Path(DEFAULT_MODEL_PATH))
+            segments = detector.process_file(audio_path)
+        except Exception as exc:
+            return {"verdict": "not_checked", "reasons": [f"SEAD 执行失败：{exc}"]}
+
+        total = sum(
+            s.end_time - s.start_time
+            for s in segments
+            if s.end_time > s.start_time
+        )
+        music = sum(
+            s.end_time - s.start_time
+            for s in segments
+            if s.end_time > s.start_time and s.label == "music"
+        )
+
+        if total <= 0:
+            return {"verdict": "not_checked", "reasons": ["音频时长为零"]}
+
+        ratio = music / total
+
+        if ratio > 0.1:
+            return {
+                "verdict": "suspect",
+                "reasons": [f"检测到 music 片段，占比 {ratio:.1%}"],
+                "music_ratio": round(ratio, 3),
+            }
+
+        return {
+            "verdict": "pass",
+            "reasons": [],
+            "music_ratio": round(ratio, 3),
+        }
+
+
 def _check_one(path: Path, expected_duration: float) -> dict:
-    """对单个视频做技术检测，返回 {verdict, reasons, metrics}。"""
+    """对单个视频做技术检测 + 音频 AI 预审，返回 {verdict, reasons, metrics}。"""
     reasons = []
     probe = _probe_video(path)
 
@@ -75,9 +146,9 @@ def _check_one(path: Path, expected_duration: float) -> dict:
             "metrics": {},
         }
 
+    # ── 技术指标 ──
     if not probe["has_video"]:
         reasons.append("没有视频流")
-
     if not probe["has_audio"]:
         reasons.append("没有音频流")
 
@@ -97,6 +168,16 @@ def _check_one(path: Path, expected_duration: float) -> dict:
     if probe["fps"] is not None and abs(probe["fps"] - 24) > 0.5:
         reasons.append(f"帧率异常：{probe['fps']}fps（预期 24）")
 
+    # ── 视觉审核（当前占位）──
+    visual = _check_visual_quality(path)
+    if visual["verdict"] == "suspect":
+        reasons.extend(visual["reasons"])
+
+    # ── 音频 AI 预审 ──
+    audio = _check_audio_bgm(path)
+    if audio["verdict"] == "suspect":
+        reasons.extend(audio["reasons"])
+
     return {
         "verdict": "suspect" if reasons else "pass",
         "reasons": reasons,
@@ -105,13 +186,15 @@ def _check_one(path: Path, expected_duration: float) -> dict:
             "fps": probe["fps"],
             "size_mb": round(size_mb, 2),
             "has_audio": probe["has_audio"],
+            "visual_score": visual.get("score"),
+            "music_ratio": audio.get("music_ratio"),
         },
     }
 
 
 def check_batch(records: list, expected_duration: float) -> list:
     """
-    对一批记录逐个做技术检测，原地写入 record["quality"]。
+    对一批记录逐个做技术检测 + 音频 AI 预审，原地写入 record["quality"]。
 
     返回新列表，按“可疑优先”排序：suspect 在前，pass 在后。
     同一状态内按 seed 升序，保证结果稳定。
