@@ -16,6 +16,7 @@ REVIEW_SCRIPT = """
 <script>
 (function() {
   var STORAGE_KEY = 'review_marks_v1';
+  var CURRENT_BATCH = window.CURRENT_BATCH || '';
 
   function loadMarks() {
     try {
@@ -40,10 +41,17 @@ REVIEW_SCRIPT = """
         btn.classList.remove('active');
       }
     });
-    var count = Object.keys(marks).length;
+
+    var batchPrefix = CURRENT_BATCH + '/';
+    var batchCount = 0;
+    Object.keys(marks).forEach(function(k) {
+      if (k.startsWith(batchPrefix)) batchCount++;
+    });
     var status = document.getElementById('mark-status');
     if (status) {
-      status.textContent = count > 0 ? ('已标记 ' + count + ' 项') : '';
+      status.textContent = batchCount > 0
+        ? ('本批次已标记 ' + batchCount + ' 项')
+        : '';
     }
   }
 
@@ -68,7 +76,9 @@ REVIEW_SCRIPT = """
       var marks = loadMarks();
       var liked = [];
       var rejected = [];
+      var batchPrefix = CURRENT_BATCH + '/';
       Object.keys(marks).forEach(function(k) {
+        if (!k.startsWith(batchPrefix)) return;
         if (marks[k] === 'like') liked.push(k);
         else if (marks[k] === 'reject') rejected.push(k);
       });
@@ -96,41 +106,31 @@ REVIEW_SCRIPT = """
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--count", type=int, default=5,
-                        help="要跑的次数（未指定 --seeds 时使用）")
-    parser.add_argument("--seeds", type=str, default="",
-                        help="逗号分隔的 seed 列表，指定后忽略 --count")
-    parser.add_argument("--segment", type=str, default="",
-                        help="片段名，如 seg_01。指定后从 segments/<name>/ 读 prompt 和 refs")
-    parser.add_argument("--prompt-file", default="subject_definitions.txt",
-                        help="仅在未指定 --segment 时使用")
-    parser.add_argument("--ref-images", type=str, default="",
-                        help="仅在未指定 --segment 时使用")
+    parser.add_argument("--count", type=int, default=5)
+    parser.add_argument("--seeds", type=str, default="")
+    parser.add_argument("--segment", type=str, default="")
+    parser.add_argument("--prompt-file", default="subject_definitions.txt")
+    parser.add_argument("--ref-images", type=str, default="")
     parser.add_argument("--profile", default="workflow_profile.json")
     parser.add_argument("--log", default="batch_log.csv")
-    parser.add_argument("--batch-root", default="batches",
-                        help="批次目录的根目录")
+    parser.add_argument("--batch-root", default="batches")
     parser.add_argument("--duration", type=float, default=9.0)
     parser.add_argument("--aspect-ratio", default="16:9 (Widescreen)")
     parser.add_argument("--megapixels", type=float, default=1.0)
-    parser.add_argument("--force", action="store_true",
-                        help="强制重跑，即使 seed 已在日志里成功过")
+    parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
 
 def load_segment(segment_name: str):
-    """从 segments/<name>/ 读取 prompt 和 refs。"""
     seg_dir = Path("segments") / segment_name
     if not seg_dir.exists():
         raise SystemExit(f"片段目录不存在：{seg_dir}")
-
     prompt_file = seg_dir / "prompt.txt"
     if not prompt_file.exists():
         raise SystemExit(f"片段缺少 prompt.txt：{prompt_file}")
     prompt_text = prompt_file.read_text(encoding="utf-8-sig")
     if not prompt_text.strip():
         raise SystemExit(f"prompt 文件是空的：{prompt_file}")
-
     refs = []
     refs_file = seg_dir / "refs.txt"
     if refs_file.exists():
@@ -139,12 +139,10 @@ def load_segment(segment_name: str):
             if not line or line.startswith("#"):
                 continue
             refs.append(line)
-
     return prompt_text, refs
 
 
 def resolve_inputs(args):
-    """统一处理 --segment 和 --prompt-file/--ref-images 两条路径。"""
     if args.segment:
         prompt_text, refs = load_segment(args.segment)
         return prompt_text, refs, args.segment
@@ -152,7 +150,6 @@ def resolve_inputs(args):
     if not prompt_text.strip():
         raise SystemExit(
             f"prompt 文件是空的：{args.prompt_file}。"
-            "请先填入内容再跑，否则会覆盖工作流里的原始提示词。"
         )
     refs = [s.strip() for s in args.ref_images.split(",") if s.strip()]
     return prompt_text, refs, ""
@@ -187,17 +184,15 @@ def make_batch_dir(root: str, segment: str) -> Path:
 
 
 def extract_last_frame(video_path: Path, output_path: Path):
-    """用 ffmpeg 抽取视频的最后一帧。"""
     subprocess.run([
         "ffmpeg", "-y", "-sseof", "-1",
         "-i", str(video_path),
         "-update", "1",
         str(output_path),
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=120)
 
 
 def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> Path:
-    """生成审片页面，带喜欢/淘汰标记和导出功能。records 应已按可疑优先排序。"""
     items_html = []
     for r in records:
         if r["status"] != "ok":
@@ -296,6 +291,7 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 <div class="grid">
 {"".join(items_html)}
 </div>
+<script>window.CURRENT_BATCH = "{batch_dir.name}";</script>
 {REVIEW_SCRIPT}
 </body>
 </html>
@@ -414,12 +410,7 @@ def main():
     preview = prompt_text[:200].replace("\n", " ")
     review_path = render_review_html(batch_dir, records, preview)
     print(f"\n审片页面：{review_path.resolve()}")
-
-    if records:
-        print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
-        print("在审片页面里可以点『喜欢』或『淘汰』，点『导出已选中』下载 JSON。")
-    else:
-        print("本次没有生成任何新视频（全部被跳过）。加 --force 可强制重跑。")
+    print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
 
 
 if __name__ == "__main__":
