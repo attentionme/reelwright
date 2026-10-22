@@ -5,7 +5,6 @@ import tempfile
 from pathlib import Path
 
 
-# ── 可选依赖：未安装时静默跳过，不影响主流程 ──
 try:
     from sead import DEFAULT_MODEL_PATH, SEADDetector
     _HAS_SEAD = True
@@ -13,13 +12,11 @@ except ImportError:
     _HAS_SEAD = False
 
 
-# 视觉审核暂时关闭（aigcqa 在 Python 3.14 下无可用 wheel）
 def _check_visual_quality(path: Path) -> dict:
     return {"verdict": "not_checked", "reasons": ["视觉审核暂未启用"]}
 
 
 def _probe_video(path: Path) -> dict:
-    """用 ffprobe 读取视频的实际时长、帧率、是否有音频流。"""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         return {"ok": False, "error": "系统中找不到 ffprobe"}
@@ -39,6 +36,8 @@ def _probe_video(path: Path) -> dict:
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "ffprobe 超时"}
+    except OSError as exc:
+        return {"ok": False, "error": f"ffprobe 启动失败：{exc}"}
 
     if result.returncode != 0:
         return {"ok": False, "error": result.stderr.strip()}
@@ -78,16 +77,14 @@ def _probe_video(path: Path) -> dict:
 
 
 def _extract_audio(video_path: Path, audio_path: Path):
-    """用 ffmpeg 提取单声道 16kHz WAV，供 SEAD 使用。"""
     subprocess.run([
         "ffmpeg", "-y", "-i", str(video_path),
         "-ac", "1", "-ar", "16000",
         "-f", "wav", str(audio_path),
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=120)
 
 
 def _check_audio_bgm(path: Path) -> dict:
-    """用 SEAD 检测音频中 music 片段占比。"""
     if not _HAS_SEAD:
         return {"verdict": "not_checked", "reasons": ["未安装 sead"]}
 
@@ -95,7 +92,11 @@ def _check_audio_bgm(path: Path) -> dict:
         audio_path = Path(tmp) / "audio.wav"
         try:
             _extract_audio(path, audio_path)
-        except Exception as exc:
+        except subprocess.TimeoutExpired:
+            return {"verdict": "not_checked", "reasons": ["音频提取超时"]}
+        except OSError as exc:
+            return {"verdict": "not_checked", "reasons": [f"音频提取启动失败：{exc}"]}
+        except subprocess.CalledProcessError as exc:
             return {"verdict": "not_checked", "reasons": [f"音频提取失败：{exc}"]}
 
         try:
@@ -135,70 +136,67 @@ def _check_audio_bgm(path: Path) -> dict:
 
 
 def _check_one(path: Path, expected_duration: float) -> dict:
-    """对单个视频做技术检测 + 音频 AI 预审，返回 {verdict, reasons, metrics}。"""
-    reasons = []
-    probe = _probe_video(path)
+    try:
+        reasons = []
+        probe = _probe_video(path)
 
-    if not probe["ok"]:
+        if not probe["ok"]:
+            return {
+                "verdict": "suspect",
+                "reasons": [f"ffprobe 失败：{probe['error']}"],
+                "metrics": {},
+            }
+
+        if not probe["has_video"]:
+            reasons.append("没有视频流")
+        if not probe["has_audio"]:
+            reasons.append("没有音频流")
+
+        if probe["duration"] is None:
+            reasons.append("无法读取时长")
+        else:
+            diff = abs(probe["duration"] - expected_duration)
+            if diff > 1.0:
+                reasons.append(
+                    f"时长异常：{probe['duration']:.1f}s（预期 {expected_duration}s）"
+                )
+
+        size_mb = path.stat().st_size / 1024 / 1024
+        if size_mb < 0.5:
+            reasons.append(f"文件过小：{size_mb:.2f}MB")
+
+        if probe["fps"] is not None and abs(probe["fps"] - 24) > 0.5:
+            reasons.append(f"帧率异常：{probe['fps']}fps（预期 24）")
+
+        visual = _check_visual_quality(path)
+        if visual["verdict"] == "suspect":
+            reasons.extend(visual["reasons"])
+
+        audio = _check_audio_bgm(path)
+        if audio["verdict"] == "suspect":
+            reasons.extend(audio["reasons"])
+
         return {
-            "verdict": "suspect",
-            "reasons": [f"ffprobe 失败：{probe['error']}"],
+            "verdict": "suspect" if reasons else "pass",
+            "reasons": reasons,
+            "metrics": {
+                "duration": probe["duration"],
+                "fps": probe["fps"],
+                "size_mb": round(size_mb, 2),
+                "has_audio": probe["has_audio"],
+                "visual_score": visual.get("score"),
+                "music_ratio": audio.get("music_ratio"),
+            },
+        }
+    except Exception as exc:
+        return {
+            "verdict": "not_checked",
+            "reasons": [f"质量检测异常：{type(exc).__name__}: {exc}"],
             "metrics": {},
         }
 
-    # ── 技术指标 ──
-    if not probe["has_video"]:
-        reasons.append("没有视频流")
-    if not probe["has_audio"]:
-        reasons.append("没有音频流")
-
-    if probe["duration"] is None:
-        reasons.append("无法读取时长")
-    else:
-        diff = abs(probe["duration"] - expected_duration)
-        if diff > 1.0:
-            reasons.append(
-                f"时长异常：{probe['duration']:.1f}s（预期 {expected_duration}s）"
-            )
-
-    size_mb = path.stat().st_size / 1024 / 1024
-    if size_mb < 0.5:
-        reasons.append(f"文件过小：{size_mb:.2f}MB")
-
-    if probe["fps"] is not None and abs(probe["fps"] - 24) > 0.5:
-        reasons.append(f"帧率异常：{probe['fps']}fps（预期 24）")
-
-    # ── 视觉审核（当前占位）──
-    visual = _check_visual_quality(path)
-    if visual["verdict"] == "suspect":
-        reasons.extend(visual["reasons"])
-
-    # ── 音频 AI 预审 ──
-    audio = _check_audio_bgm(path)
-    if audio["verdict"] == "suspect":
-        reasons.extend(audio["reasons"])
-
-    return {
-        "verdict": "suspect" if reasons else "pass",
-        "reasons": reasons,
-        "metrics": {
-            "duration": probe["duration"],
-            "fps": probe["fps"],
-            "size_mb": round(size_mb, 2),
-            "has_audio": probe["has_audio"],
-            "visual_score": visual.get("score"),
-            "music_ratio": audio.get("music_ratio"),
-        },
-    }
-
 
 def check_batch(records: list, expected_duration: float) -> list:
-    """
-    对一批记录逐个做技术检测 + 音频 AI 预审，原地写入 record["quality"]。
-
-    返回新列表，按“可疑优先”排序：suspect 在前，pass 在后。
-    同一状态内按 seed 升序，保证结果稳定。
-    """
     for r in records:
         if r["status"] != "ok":
             r["quality"] = {"verdict": "error", "reasons": [], "metrics": {}}
@@ -206,7 +204,7 @@ def check_batch(records: list, expected_duration: float) -> list:
         r["quality"] = _check_one(Path(r["batch_file"]), expected_duration)
 
     def sort_key(r):
-        order = {"error": 0, "suspect": 1, "pass": 2}
-        return (order.get(r["quality"]["verdict"], 3), r["seed"])
+        order = {"error": 0, "suspect": 1, "not_checked": 2, "pass": 3}
+        return (order.get(r["quality"]["verdict"], 4), r["seed"])
 
     return sorted(records, key=sort_key)
