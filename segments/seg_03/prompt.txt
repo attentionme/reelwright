@@ -1,0 +1,19 @@
+subject_definitions:
+- <Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
+- <Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
+
+summary:
+[keyframe completion] 桃子 points out that this is the third time he has wiped the same spot, 小满's hand stops dead on the table, and after a silent beat he answers her flat accusation with the same two words.
+
+retention_analysis:
+- <Subject 1> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 1> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+- <Subject 2> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 2> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+
+detailed_description:
+The video begins exactly from the previous segment's final frame, which shows: <Subject 1> rubbing one spot of the dining table with a folded rag while <Subject 2> looks down at the tabletop, framed low and close to the wood surface. The camera rises slowly to eye level and tightens onto <Subject 1>'s face. <Subject 2> watches his hand move back and forth, (S2) says: <d>[Chinese] 你已经擦第三遍了。</d> <Subject 1>'s hand stops in the middle of the stroke; the rag stays pressed on the spot, and he says nothing, jaw tight, eyes lowered. The room goes quiet for a beat, her mug still on the table. <Subject 2> steps fully into frame beside him, her voice softer now, (S2) says: <d>[Chinese] 你有事。</d> <Subject 1> keeps his head down and answers quietly, (S1) says: <d>[Chinese] 没事。</d> The camera holds on his lowered face with the crumpled rag still under his palm. Current sound: room tone drops lower, the clock ticking becomes prominent, one small damp cloth squelch as his hand stops.
+
+overall_soundscape:
+Very quiet apartment ambience, a prominent wall clock tick, one soft cloth squelch as the wiping stops, faint distant traffic, restrained breathing. No background music.
+
+non_diegetic_music:
+N/A

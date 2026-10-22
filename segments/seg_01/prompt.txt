@@ -1,37 +1,19 @@
 subject_definitions:
-<Subject 1> is Xiaoman, the young man from <Picture 1>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. He remains a quiet, thin young Chinese man with a clearly 2D hand-drawn visual language, clean dark ink outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble.
-
-<Subject 2> is Taozi, the young woman from <Picture 2>, with the exact facial identity, hairstyle, clothing, body proportions, and simplified hand-drawn appearance preserved. She remains a natural young Chinese woman with clear hand-drawn outlines, flat graphic colors, simplified anatomy, and restrained facial animation.
-
-<Picture 5> is the exact final frame of the previous 12-second video clip and the required first frame of [Shot 1] in this target video. It contains the same apartment environment, character positions, poses, facial expressions, lighting, framing, and visual composition from the end of the previous clip. Use <Picture 5> as the strict visual starting state.
+- <Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
+- <Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
 
 summary:
-[keyframe completion + reference generation] The target video is the final 9-second continuation of the previous clip and begins exactly from <Picture 5>, the previous clip's final frame. The first frame must preserve the previous visual state with no reinterpretation. Xiaoman answers Taozi and both characters simply settle down to eat. The final moment should feel quiet, ordinary, and emotionally understated.
-
-Spoken Chinese dialogue is audio only and is never visualized as written text. Absolutely no subtitles, captions, speech bubbles, typography, written dialogue, text overlays, title cards, logos, or readable text. No background music.
+[reference generation] In a warm lamplit apartment at night, 桃子 stands over the dining table and presses 小满 about his silence, while he sits with a folded rag under his hand and answers her with single flat words.
 
 retention_analysis:
-<Subject 1> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Xiaoman's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.
-<Subject 2> (appears in [Shot 1], [Shot 2], [Shot 3]): fully_preserved - Taozi's exact identity, clothing, body proportions, hand-drawn 2D appearance, and restrained motion are preserved.
-<Picture 5> (used as the first frame of [Shot 1]): fully_preserved - the previous clip's final visual state is used as the exact opening state of this clip.
+- <Subject 1> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 1> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+- <Subject 2> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 2> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
 
 detailed_description:
-The video begins exactly from <Picture 5>. For the first brief moment, preserve the frame without noticeable movement. The characters must not suddenly change pose, position, scale, facial expression, or clothing. The environment and camera framing must remain identical to the reference frame.
-
-The apartment background remains realistic and photographic. The characters remain clearly hand-drawn 2D figures with clean dark outlines, flat colors, minimal shading, simplified anatomy, and slight hand-drawn line wobble. Animation is limited and simple.
-
-All Chinese dialogue is spoken and audible only. Never display dialogue as subtitles, captions, written Chinese, speech bubbles, floating text, typography, or any other graphic text.
-
-[Shot 1] The video starts from the exact state shown in <Picture 5>. Xiaoman looks toward Taozi and answers calmly, <d>[Chinese] 我也吃。</d> He gives a very small nod toward the dining table.
-
-[Shot 2] At 00:03.300, both characters make only very small movements toward the table. Xiaoman pulls out a chair with one simple hand motion and sits down. Taozi sits opposite him. The movement should resemble limited 2D hand-drawn animation with clear pose changes, not continuous realistic 3D motion. The camera remains nearly static with an extremely subtle slow Push In.
-
-[Shot 3] At 00:06.500, both characters settle into a quiet seated pose. Xiaoman looks down toward the food. Taozi looks briefly at Xiaoman. Neither character speaks. Hold the final composition steadily for the final moment.
-
-End on a clean realistic apartment composition with the two hand-drawn characters sitting quietly together. This final frame should also be visually stable and suitable for extraction as a future continuation reference.
+Interior of a small apartment living room in the evening. A wooden dining table sits at frame left, a floor lamp beside the sofa casts warm yellow light, and behind the two characters a dark window shows blurred night city lights. <Subject 2> stands at frame right, three steps from the table, a mug in one hand, her body angled toward <Subject 1>. <Subject 1> sits at the near side of the table, a folded rag lying under his right hand on the tabletop, shoulders slightly forward, eyes down. The camera holds a medium two-shot and pushes in slowly. <Subject 2> studies his face and says, (S2) says: <d>[Chinese] 你今天怎么了？</d> <Subject 1> does not lift his head, (S1) says: <d>[Chinese] 没怎么。</d> <Subject 2> sets the mug down on the table and takes one step closer, (S2) says: <d>[Chinese] 你今天一句话都没说。</d> <Subject 1> exhales once through his nose, fingers pressing flat on the rag, (S1) says: <d>[Chinese] 累。</d> The camera settles into a tighter two-shot; neither of them moves for a beat. Current sound: quiet room tone, a wall clock ticking, faint traffic outside, the soft rustle of the rag.
 
 overall_soundscape:
-Natural apartment room tone, faint ventilation hum, subtle chair movement, soft table and fabric sounds, distant nighttime city ambience. Dialogue remains clear and natural.
+Quiet apartment room tone with a wall clock ticking, faint night traffic through the window, small cloth rustle and subtle clothing movement. No background music.
 
 non_diegetic_music:
 N/A
