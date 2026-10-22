@@ -41,7 +41,7 @@ def find_tail_ref(refs):
 
 
 def find_selected_video(prev_seg: str, batch_root: str):
-    """从 review_marks.json 里找上一段被标记为喜欢的视频。"""
+    """从 review_marks.json 里找上一段被标记为喜欢的视频，优先使用最新批次。"""
     marks_path = Path("review_marks.json")
     if not marks_path.exists():
         raise SystemExit(
@@ -52,6 +52,7 @@ def find_selected_video(prev_seg: str, batch_root: str):
     data = json.loads(marks_path.read_text(encoding="utf-8"))
     liked = data.get("liked", [])
 
+    candidates = []
     for key in liked:
         parts = key.split("/")
         if len(parts) != 2:
@@ -62,20 +63,25 @@ def find_selected_video(prev_seg: str, batch_root: str):
         m = re.match(r"(?:seed_)?(\d+)$", seed_part)
         if not m:
             continue
-        seed = int(m.group(1))
+        candidates.append((batch_name, int(m.group(1))))
+
+    # 按批次名倒序（最新批次在前），同批次内按 seed 升序
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+    for batch_name, seed in candidates:
         batch_dir = Path(batch_root) / batch_name
         if not batch_dir.exists():
             continue
-        candidates = [
+        matches = [
             p for p in batch_dir.glob(f"seed_{seed}.*")
             if p.suffix.lower() == ".mp4"
         ]
-        if candidates:
-            return candidates[0]
+        if matches:
+            return matches[0]
 
     raise SystemExit(
-        f"review_marks.json 里没有 {prev_seg} 的喜欢项。"
-        f"请先在审片页面把 {prev_seg} 的视频标记为喜欢。"
+        f"review_marks.json 里没有 {prev_seg} 的有效喜欢项。"
+        f"请先在审片页面把 {prev_seg} 的视频标记为喜欢，然后导出 review_marks.json。"
     )
 
 
@@ -92,7 +98,7 @@ def extract_last_frame(video_path: Path, output_path: Path):
         "-i", str(video_path),
         "-update", "1",
         str(output_path),
-    ], check=True, capture_output=True)
+    ], check=True, capture_output=True, timeout=120)
 
 
 def prepare_tail(prev_seg: str, tail_name: str, profile_path: str, batch_root: str):
