@@ -135,6 +135,8 @@ def parse_args():
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--retry-delay", type=int, default=30,
                         help="失败后等多少秒再跑下一个 seed，默认 30")
+    parser.add_argument("--trial", action="store_true",
+                        help="试验模式：duration=5, megapixels=1.0, count=1")
     return parser.parse_args()
 
 
@@ -324,6 +326,14 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str,
 
 def main():
     args = parse_args()
+
+    if args.trial:
+        args.duration = 5.0
+        args.megapixels = 1.0
+        if not args.seeds:
+            args.count = 1
+        print("[trial] 试验模式：duration=5.0, megapixels=1.0, count=1")
+
     prompt_text, ref_images, segment = resolve_inputs(args)
     episode_id = load_episode_id()
 
@@ -420,7 +430,6 @@ def main():
                 })
                 print(f"[{i}/{len(seeds)}] [error] seed={seed}: {e}")
 
-                # 失败后等一段时间再跑下一个，给 ComfyUI 时间清理显存
                 if i < len(seeds):
                     print(f"  等待 {args.retry_delay} 秒让 ComfyUI 清理显存，再跑下一个...")
                     time.sleep(args.retry_delay)
