@@ -8,17 +8,20 @@ from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--segment", required=True, help="要跑的片段名，如 seg_02")
+    parser.add_argument("--segment", required=True)
     parser.add_argument("--profile", default="workflow_profile_2.json")
     parser.add_argument("--count", type=int, default=3)
     parser.add_argument("--megapixels", type=float, default=1.5)
-    parser.add_argument("--duration", type=float, default=6.0)
+    parser.add_argument("--duration", type=float, default=0.0,
+                        help="0 表示从 segments/<name>/meta.json 读")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--batch-root", default="batches")
+    parser.add_argument("--trial", action="store_true",
+                        help="试验模式：duration=5, megapixels=1.0, count=1")
     return parser.parse_args()
 
 
-def load_refs(seg_name: str):
+def load_refs(seg_name):
     refs_file = Path("segments") / seg_name / "refs.txt"
     if not refs_file.exists():
         return []
@@ -32,7 +35,6 @@ def load_refs(seg_name: str):
 
 
 def find_tail_ref(refs):
-    """找 refs 里 tail_from_<prev>.png 这样的引用。"""
     for ref in refs:
         m = re.match(r"tail_from_(\w+)\.png$", ref)
         if m:
@@ -40,59 +42,60 @@ def find_tail_ref(refs):
     return None, None
 
 
-def find_selected_video(prev_seg: str, batch_root: str):
-    """从 review_marks.json 里找上一段被标记为喜欢的视频，优先使用最新批次。"""
-    marks_path = Path("review_marks.json")
-    if not marks_path.exists():
-        raise SystemExit(
-            f"找不到 review_marks.json。"
-            f"请先跑完 {prev_seg}，在审片页面标记喜欢，然后导出 review_marks.json。"
-        )
+def load_duration(seg_name, explicit_duration):
+    if explicit_duration > 0:
+        return explicit_duration
+    meta_path = Path("segments") / seg_name / "meta.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return float(meta.get("estimated_duration", 10.0))
+    return 10.0
 
-    data = json.loads(marks_path.read_text(encoding="utf-8"))
-    liked = data.get("liked", [])
 
-    candidates = []
-    for key in liked:
-        parts = key.split("/")
-        if len(parts) != 2:
-            continue
-        batch_name, seed_part = parts
-        if not batch_name.startswith(prev_seg + "_"):
-            continue
-        m = re.match(r"(?:seed_)?(\d+)$", seed_part)
-        if not m:
-            continue
-        candidates.append((batch_name, int(m.group(1))))
-
-    # 按批次名倒序（最新批次在前），同批次内按 seed 升序
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-
-    for batch_name, seed in candidates:
-        batch_dir = Path(batch_root) / batch_name
-        if not batch_dir.exists():
-            continue
-        matches = [
-            p for p in batch_dir.glob(f"seed_{seed}.*")
-            if p.suffix.lower() == ".mp4"
-        ]
-        if matches:
-            return matches[0]
-
-    raise SystemExit(
-        f"review_marks.json 里没有 {prev_seg} 的有效喜欢项。"
-        f"请先在审片页面把 {prev_seg} 的视频标记为喜欢，然后导出 review_marks.json。"
+def find_selected_video(prev_seg, batch_root):
+    """只用最新批次：优先 liked，其次第一个 mp4。忽略旧批次的 liked。"""
+    all_batches = sorted(
+        [d for d in Path(batch_root).iterdir()
+         if d.is_dir() and d.name.startswith(prev_seg + "_")],
+        reverse=True,
     )
+    if not all_batches:
+        raise SystemExit(f"找不到 {prev_seg} 的任何批次")
+
+    latest = all_batches[0]
+    print(f"[latest] 使用最新批次：{latest.name}")
+
+    marks_path = Path("review_marks.json")
+    if marks_path.exists():
+        data = json.loads(marks_path.read_text(encoding="utf-8"))
+        for key in data.get("liked", []):
+            if key.startswith(latest.name + "/"):
+                seed_part = key.split("/")[1]
+                m = re.match(r"(?:seed_)?(\d+)$", seed_part)
+                if m:
+                    seed = int(m.group(1))
+                    matches = [
+                        p for p in latest.glob(f"seed_{seed}.*")
+                        if p.suffix.lower() == ".mp4"
+                    ]
+                    if matches:
+                        print(f"[liked] 最新批次的喜欢项：{key}")
+                        return matches[0]
+
+    mp4s = sorted(latest.glob("*.mp4"))
+    if not mp4s:
+        raise SystemExit(f"{latest} 里没有 mp4")
+    print(f"[fallback] 最新批次第一个：{mp4s[0].name}")
+    return mp4s[0]
 
 
-def get_input_dir(profile_path: str) -> Path:
-    """从 profile 的 output_dir 推导 input 目录。"""
+def get_input_dir(profile_path):
     profile = json.loads(Path(profile_path).read_text(encoding="utf-8-sig"))
     output_dir = Path(profile["output_dir"])
     return output_dir.parent / "input"
 
 
-def extract_last_frame(video_path: Path, output_path: Path):
+def extract_last_frame(video_path, output_path):
     subprocess.run([
         "ffmpeg", "-y", "-sseof", "-1",
         "-i", str(video_path),
@@ -101,8 +104,7 @@ def extract_last_frame(video_path: Path, output_path: Path):
     ], check=True, capture_output=True, timeout=120)
 
 
-def prepare_tail(prev_seg: str, tail_name: str, profile_path: str, batch_root: str):
-    """从上一段选中的视频抽尾帧，复制到 input。"""
+def prepare_tail(prev_seg, tail_name, profile_path, batch_root):
     video = find_selected_video(prev_seg, batch_root)
     print(f"上一段选中视频：{video}")
 
@@ -123,6 +125,13 @@ def prepare_tail(prev_seg: str, tail_name: str, profile_path: str, batch_root: s
 
 def main():
     args = parse_args()
+
+    if args.trial:
+        args.duration = 5.0
+        args.megapixels = 1.0
+        args.count = 1
+        print("[trial] 试验模式：duration=5.0, megapixels=1.0, count=1")
+
     seg_dir = Path("segments") / args.segment
     if not seg_dir.exists():
         raise SystemExit(f"片段目录不存在：{seg_dir}")
@@ -136,6 +145,9 @@ def main():
     else:
         print("没有自动尾帧引用，直接跑。")
 
+    duration = args.duration if args.duration > 0 else load_duration(args.segment, 0)
+    print(f"本段时长：{duration}s")
+
     cmd = [
         str(Path(".venv") / "Scripts" / "python.exe"),
         "batch_run.py",
@@ -143,10 +155,12 @@ def main():
         "--profile", args.profile,
         "--count", str(args.count),
         "--megapixels", str(args.megapixels),
-        "--duration", str(args.duration),
+        "--duration", str(duration),
     ]
     if args.force:
         cmd.append("--force")
+    if args.trial:
+        cmd.append("--trial")
 
     print(f"\n执行：{' '.join(cmd)}\n")
     subprocess.run(cmd, check=True)
