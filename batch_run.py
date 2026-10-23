@@ -12,10 +12,19 @@ from comfy_adapter import WorkflowAdapter
 from quality_check import check_batch
 
 
+def load_episode_id() -> str:
+    p = Path("episode.txt")
+    if p.exists():
+        text = p.read_text(encoding="utf-8-sig").strip()
+        if text:
+            return text
+    return "ep01"
+
+
 REVIEW_SCRIPT = """
 <script>
 (function() {
-  var STORAGE_KEY = 'review_marks_v1';
+  var STORAGE_KEY = 'review_marks_' + window.CURRENT_EPISODE;
   var CURRENT_BATCH = window.CURRENT_BATCH || '';
 
   function loadMarks() {
@@ -41,16 +50,11 @@ REVIEW_SCRIPT = """
         btn.classList.remove('active');
       }
     });
-
-    var batchPrefix = CURRENT_BATCH + '/';
-    var batchCount = 0;
-    Object.keys(marks).forEach(function(k) {
-      if (k.startsWith(batchPrefix)) batchCount++;
-    });
+    var total = Object.keys(marks).length;
     var status = document.getElementById('mark-status');
     if (status) {
-      status.textContent = batchCount > 0
-        ? ('本批次已标记 ' + batchCount + ' 项')
+      status.textContent = total > 0
+        ? ('本集已标记 ' + total + ' 项（跨批次累积）')
         : '';
     }
   }
@@ -76,13 +80,15 @@ REVIEW_SCRIPT = """
       var marks = loadMarks();
       var liked = [];
       var rejected = [];
-      var batchPrefix = CURRENT_BATCH + '/';
       Object.keys(marks).forEach(function(k) {
-        if (!k.startsWith(batchPrefix)) return;
         if (marks[k] === 'like') liked.push(k);
         else if (marks[k] === 'reject') rejected.push(k);
       });
-      var payload = { liked: liked, rejected: rejected };
+      var payload = {
+        episode: window.CURRENT_EPISODE,
+        liked: liked,
+        rejected: rejected
+      };
       var blob = new Blob(
         [JSON.stringify(payload, null, 2)],
         { type: 'application/json' }
@@ -95,6 +101,15 @@ REVIEW_SCRIPT = """
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    });
+  }
+
+  var clearBtn = document.getElementById('clear-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function() {
+      if (!confirm('确定要清空本集（' + window.CURRENT_EPISODE + '）的所有标记吗？')) return;
+      localStorage.removeItem(STORAGE_KEY);
+      refreshButtons();
     });
   }
 
@@ -118,6 +133,8 @@ def parse_args():
     parser.add_argument("--aspect-ratio", default="16:9 (Widescreen)")
     parser.add_argument("--megapixels", type=float, default=1.0)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--retry-delay", type=int, default=30,
+                        help="失败后等多少秒再跑下一个 seed，默认 30")
     return parser.parse_args()
 
 
@@ -148,9 +165,7 @@ def resolve_inputs(args):
         return prompt_text, refs, args.segment
     prompt_text = Path(args.prompt_file).read_text(encoding="utf-8-sig")
     if not prompt_text.strip():
-        raise SystemExit(
-            f"prompt 文件是空的：{args.prompt_file}。"
-        )
+        raise SystemExit(f"prompt 文件是空的：{args.prompt_file}。")
     refs = [s.strip() for s in args.ref_images.split(",") if s.strip()]
     return prompt_text, refs, ""
 
@@ -192,7 +207,8 @@ def extract_last_frame(video_path: Path, output_path: Path):
     ], check=True, capture_output=True, timeout=120)
 
 
-def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> Path:
+def render_review_html(batch_dir: Path, records: list, prompt_preview: str,
+                       episode_id: str) -> Path:
     items_html = []
     for r in records:
         if r["status"] != "ok":
@@ -252,13 +268,16 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>审片 · {batch_dir.name}</title>
+<title>审片 · {episode_id} · {batch_dir.name}</title>
 <style>
   body {{ background:#1a1a1a; color:#e0e0e0; font-family:-apple-system,"Segoe UI",sans-serif; margin:0; padding:24px; }}
   h1 {{ font-size:18px; font-weight:500; margin:0 0 8px; }}
-  .toolbar {{ display:flex; align-items:center; gap:12px; margin:16px 0; }}
+  .episode {{ font-size:12px; color:#6b8; margin-bottom:4px; }}
+  .toolbar {{ display:flex; align-items:center; gap:12px; margin:16px 0; flex-wrap:wrap; }}
   .toolbar button {{ background:#2a2a2a; color:#e0e0e0; border:1px solid #444; padding:6px 14px; border-radius:4px; cursor:pointer; font-size:13px; }}
   .toolbar button:hover {{ background:#333; }}
+  .toolbar button.danger {{ border-color:#6a3a3a; color:#f99; }}
+  .toolbar button.danger:hover {{ background:#3a1a1a; }}
   #mark-status {{ font-size:13px; color:#8f8; }}
   .summary {{ font-size:13px; color:#888; margin-bottom:16px; }}
   .prompt {{ font-size:12px; color:#888; margin-bottom:24px; white-space:pre-wrap; max-height:100px; overflow:auto; background:#111; padding:12px; border-radius:6px; }}
@@ -281,17 +300,19 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 </style>
 </head>
 <body>
+<div class="episode">本集：{episode_id}</div>
 <h1>审片 · {batch_dir.name}</h1>
 <div class="summary">成功 {ok_count} 个 · 可疑 {suspect_count} 个 · 可疑排在前面</div>
 <div class="toolbar">
-  <button id="export-btn">导出已选中</button>
+  <button id="export-btn">导出本集全部标记</button>
+  <button id="clear-btn" class="danger">清空本集标记</button>
   <span id="mark-status"></span>
 </div>
 <div class="prompt">prompt 预览：{html.escape(prompt_preview)}</div>
 <div class="grid">
 {"".join(items_html)}
 </div>
-<script>window.CURRENT_BATCH = "{batch_dir.name}";</script>
+<script>window.CURRENT_EPISODE = "{episode_id}"; window.CURRENT_BATCH = "{batch_dir.name}";</script>
 {REVIEW_SCRIPT}
 </body>
 </html>
@@ -304,6 +325,7 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str) -> P
 def main():
     args = parse_args()
     prompt_text, ref_images, segment = resolve_inputs(args)
+    episode_id = load_episode_id()
 
     seeds = resolve_seeds(args)
     done_seeds = set() if args.force else load_done_seeds(args.log)
@@ -316,6 +338,7 @@ def main():
     tail_dir.mkdir(exist_ok=True)
 
     print(f"计划跑 {len(seeds)} 次，已完成 {len(done_seeds & set(seeds))} 次")
+    print(f"本集：{episode_id}")
     if segment:
         print(f"片段：{segment}")
     print(f"prompt 长度：{len(prompt_text)} 字符")
@@ -328,9 +351,9 @@ def main():
         writer = csv.writer(f)
         if write_header:
             writer.writerow([
-                "timestamp", "segment", "seed", "duration", "aspect_ratio",
-                "megapixels", "status", "output_path", "file_size",
-                "elapsed_seconds", "error",
+                "timestamp", "episode", "segment", "seed", "duration",
+                "aspect_ratio", "megapixels", "status", "output_path",
+                "file_size", "elapsed_seconds", "error",
             ])
             f.flush()
 
@@ -364,7 +387,8 @@ def main():
 
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    segment, seed, args.duration, args.aspect_ratio, args.megapixels,
+                    episode_id, segment, seed, args.duration,
+                    args.aspect_ratio, args.megapixels,
                     "ok", str(path), path.stat().st_size,
                     round(elapsed, 1), "",
                 ])
@@ -383,7 +407,8 @@ def main():
                 elapsed = time.time() - start
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    segment, seed, args.duration, args.aspect_ratio, args.megapixels,
+                    episode_id, segment, seed, args.duration,
+                    args.aspect_ratio, args.megapixels,
                     "error", "", "", round(elapsed, 1), str(e),
                 ])
                 f.flush()
@@ -394,6 +419,11 @@ def main():
                     "elapsed": elapsed, "error": str(e),
                 })
                 print(f"[{i}/{len(seeds)}] [error] seed={seed}: {e}")
+
+                # 失败后等一段时间再跑下一个，给 ComfyUI 时间清理显存
+                if i < len(seeds):
+                    print(f"  等待 {args.retry_delay} 秒让 ComfyUI 清理显存，再跑下一个...")
+                    time.sleep(args.retry_delay)
 
     if records:
         print("\n正在做技术质量检测...")
@@ -408,7 +438,7 @@ def main():
             print("所有成功视频都通过了技术检测。")
 
     preview = prompt_text[:200].replace("\n", " ")
-    review_path = render_review_html(batch_dir, records, preview)
+    review_path = render_review_html(batch_dir, records, preview, episode_id)
     print(f"\n审片页面：{review_path.resolve()}")
     print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
 
