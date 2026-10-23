@@ -21,8 +21,10 @@ H3_SECTIONS = [
     "non_diegetic_music",
 ]
 
-MAX_SEGMENT_SECONDS = 13.0
-PREFERRED_SEGMENT_RANGE = (6.0, 12.0)
+# 单段安全时长上限（秒）。H3 单段约 362 帧 @ 24fps ≈ 15s，留 1s 余量
+MAX_SEGMENT_SECONDS = 14.0
+# 建议的每段时长范围（多视图节奏考虑）
+PREFERRED_SEGMENT_RANGE = (10.0, 14.0)
 
 
 def parse_args():
@@ -68,7 +70,7 @@ def build_system_prompt(ref_characters: list) -> str:
 ━━ SEGMENTATION RULES (MUST FOLLOW) ━━
 1. Prefer plot boundaries: a complete action, a dialogue exchange, or a scene change constitutes one segment.
 2. Hard limit: {MAX_SEGMENT_SECONDS:.0f} seconds per segment.
-3. Preferred duration: {PREFERRED_SEGMENT_RANGE[0]:.0f}–{PREFERRED_SEGMENT_RANGE[1]:.0f} seconds per segment.
+3. Preferred duration: {PREFERRED_SEGMENT_RANGE[0]:.0f}–{PREFERRED_SEGMENT_RANGE[1]:.0f} seconds per segment. Each segment should feel unhurried and cinematic — do NOT cut a segment shorter than 10 seconds unless the plot boundary makes it impossible.
 4. Adjacent segments must be continuous: the next segment's narrative start = previous segment's narrative end state.
 5. Total segment count: 2–5.
 6. NEVER generate a "pure subtitle card", "black screen", or "end card" segment.
@@ -93,6 +95,14 @@ DO use natural language that describes WHAT IS VISIBLE, not HOW the camera moves
 - To return: "Then the view changes back to ..." + describe what the viewer sees
 - To end: "The camera holds on this view."
 
+━━ VIEW DURATION BALANCE (CRITICAL) ━━
+
+Each view must last long enough for the audience to read what is happening.
+- With 2 views in a segment: each view lasts about half the segment duration (roughly 5–7 seconds).
+- With 3 views in a segment: each view lasts about one third of the segment duration (roughly 4–5 seconds).
+- Always write a rough duration hint in the detailed_description, e.g., "This view lasts about 5 seconds."
+- Do NOT make any view shorter than 3 seconds. If a view would be shorter than 3 seconds, merge it into the neighbouring view instead.
+
 ━━ VIEW SELECTION RULES (SAFEST TO RISKIEST) ━━
 
 Prefer:
@@ -112,7 +122,7 @@ The video starts with a wide view of [the room/scene], showing [Subject 1] and [
 - A clear description of what is visible (who, what, where in the frame)
 - The action that happens during this view
 - Dialogue, if any, formatted as `(S1) says: <d>[Chinese] exact words</d>`
-- A rough duration hint, e.g., "This view lasts about 2 seconds"
+- A rough duration hint matching the balance rules above
 
 ━━ OFFICIAL H3 Ref2VA SIX-SECTION FORMAT ━━
 
@@ -135,7 +145,7 @@ retention_analysis:
 - Write in English.
 
 detailed_description:
-- Follow the MULTI-VIEW STRUCTURE rules above.
+- Follow the MULTI-VIEW STRUCTURE, VIEW DURATION BALANCE, and VIEW SELECTION RULES above.
 - If NOT the first segment, open with: `The video begins exactly from the previous segment's final frame, which shows: [previous final state].`
 - Dialogue format: `(S2) says: <d>[Chinese] exact words</d>`. Speaker ID must match Subject number (S1 = Subject 1, S2 = Subject 2).
 - Keep each dialogue line SHORT (one sentence, under 15 Chinese characters).
@@ -161,7 +171,7 @@ non_diegetic_music:
     {{
       "id": "seg_01",
       "narrative_goal": "one sentence describing what this segment accomplishes",
-      "estimated_duration": 9.0,
+      "estimated_duration": 12.0,
       "views": 2,
       "prompt": "complete six-section prompt",
       "refs": ["{ref_characters[0] if ref_characters else "role1.png"}", "{ref_characters[1] if len(ref_characters) > 1 else "role2.png"}"]
@@ -170,7 +180,7 @@ non_diegetic_music:
 }}
 
 REMEMBER:
-- Each segment should have 2–3 views.
+- Each segment should have 2–3 views, and total duration should be 10–14 seconds.
 - From seg_02 onward, refs MUST include tail_from_seg_XX.png.
 - Only output JSON.
 """
@@ -189,7 +199,9 @@ def call_llm(client, model, system_prompt, script_text,
             "content": (
                 "Your previous output failed format validation:\n"
                 + "\n".join(f"- {p}" for p in problems)
-                + "\n\nPlease fix and output JSON again. Follow the six-section format EXACTLY."
+                + "\n\nPlease fix and output JSON again. "
+                  "Each segment must be 10–14 seconds with 2–3 views. "
+                  "Follow the six-section format EXACTLY."
             ),
         })
 
@@ -232,13 +244,11 @@ def validate_h3_prompt(prompt):
         if found != H3_SECTIONS:
             errors.append(f"section order wrong: {found}")
 
-    # 文件名
     if re.search(r"小满\d*[_\d]*\.png", prompt):
         errors.append("contains filename 小满N.png")
     if re.search(r"桃子\d*[_\d]*\.png", prompt):
         errors.append("contains filename 桃子N.png")
 
-    # Subject 行（只在 subject_definitions 块内检查）
     subj_block = _extract_section(prompt, "subject_definitions", "summary")
     if not subj_block.strip():
         errors.append("subject_definitions block empty")
@@ -252,13 +262,11 @@ def validate_h3_prompt(prompt):
             if "<Picture " not in line:
                 errors.append(f"Subject missing <Picture N>: {line[:80]}")
 
-    # summary 前缀
     summary_block = _extract_section(prompt, "summary", "retention_analysis")
     first = summary_block.strip().splitlines()[0] if summary_block.strip() else ""
     if first and not first.startswith("["):
         errors.append(f"summary must start with '[', got: {first[:60]!r}")
 
-    # 禁用摄影术语
     banned_terms = [
         r"\[Shot \d+\]",
         r"(?i)\bclose-?up\b",
@@ -316,7 +324,14 @@ def validate_segments(plan):
         if not isinstance(seg.get("estimated_duration"), (int, float)):
             problems.append(f"{tag}: estimated_duration not numeric")
         elif seg["estimated_duration"] > MAX_SEGMENT_SECONDS:
-            problems.append(f"{tag}: duration {seg['estimated_duration']} > {MAX_SEGMENT_SECONDS}")
+            problems.append(
+                f"{tag}: duration {seg['estimated_duration']} > {MAX_SEGMENT_SECONDS}"
+            )
+        elif seg["estimated_duration"] < PREFERRED_SEGMENT_RANGE[0]:
+            problems.append(
+                f"{tag}: duration {seg['estimated_duration']} < "
+                f"{PREFERRED_SEGMENT_RANGE[0]} (too short for multi-view pacing)"
+            )
 
         for err in validate_h3_prompt(seg["prompt"]):
             problems.append(f"{tag}: {err}")
@@ -453,7 +468,7 @@ def main():
     if not args.dry_run:
         print("\n下一步：")
         print("  1. 检查每段 prompt.txt 的 detailed_description，确认有 2–3 个视图")
-        print("  2. 跑：.venv\\Scripts\\python.exe .\\run_episode.py --trial")
+        print("  2. 跑：.venv\\Scripts\\python.exe .\\run_episode.py --count 2")
 
 
 if __name__ == "__main__":
