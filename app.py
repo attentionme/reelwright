@@ -24,6 +24,14 @@ from tools import (
     check_directory_requirements,
 )
 
+from episode_state import (
+    read_episode_id,
+    scan_segments,
+    read_marks,
+    segment_status,
+    collect_episode_status,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -328,109 +336,6 @@ set_tracing_disabled(disabled=True)
 # 集状态检查工具（只读，不执行任何生成脚本）
 # ============================================================
 
-def _read_episode_id() -> str:
-    p = Path(__file__).with_name("episode.txt")
-    if p.exists():
-        text = p.read_text(encoding="utf-8-sig").strip()
-        if text:
-            return text
-    return "ep01"
-
-
-def _scan_segments() -> list:
-    root = Path(__file__).with_name("segments")
-    if not root.exists():
-        return []
-
-    segs = []
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-        if not re.fullmatch(r"seg_\d+", d.name):
-            continue
-
-        meta = {}
-        meta_path = d / "meta.json"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-        segs.append({
-            "id": d.name,
-            "duration": meta.get("estimated_duration"),
-            "views": meta.get("views"),
-            "narrative_goal": meta.get("narrative_goal"),
-        })
-
-    segs.sort(key=lambda s: int(s["id"].split("_")[1]))
-    return segs
-
-
-def _scan_batches(seg_id: str) -> list:
-    root = Path(__file__).with_name("batches")
-    if not root.exists():
-        return []
-
-    compact = seg_id.replace("_", "")
-    batches = []
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-        if not (
-            d.name.startswith(compact + "_")
-            or d.name.startswith(seg_id + "_")
-        ):
-            continue
-        mp4s = sorted(d.glob("*.mp4"))
-        if not mp4s:
-            continue
-        batches.append({
-            "name": d.name,
-            "videos": [m.name for m in mp4s],
-            "mtime": d.stat().st_mtime,
-        })
-
-    batches.sort(key=lambda b: b["mtime"], reverse=True)
-    return batches
-
-
-def _read_marks() -> dict:
-    p = Path(__file__).with_name("review_marks.json")
-    if not p.exists():
-        return {"episode": "", "liked": [], "rejected": []}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {"episode": "", "liked": [], "rejected": []}
-
-
-def _segment_status(seg_id: str, liked_keys: set) -> dict:
-    batches = _scan_batches(seg_id)
-    if not batches:
-        return {
-            "batch_count": 0,
-            "video_count": 0,
-            "latest_batch": None,
-            "liked": [],
-            "status": "pending",
-        }
-
-    seg_liked = [
-        k for k in liked_keys
-        if any(k.startswith(b["name"] + "/") for b in batches)
-    ]
-
-    return {
-        "batch_count": len(batches),
-        "video_count": sum(len(b["videos"]) for b in batches),
-        "latest_batch": batches[0]["name"],
-        "liked": seg_liked,
-        "status": "reviewed" if seg_liked else "generated",
-    }
-
-
 @function_tool
 def inspect_episode() -> str:
     """
@@ -438,27 +343,7 @@ def inspect_episode() -> str:
 
     当用户问“现在什么状态”“跑到哪了”“哪段还没跑”“哪段还没标记”时调用。
     """
-    episode = _read_episode_id()
-    segments = _scan_segments()
-    marks = _read_marks()
-    liked_keys = set(marks.get("liked", []))
-
-    result_segments = []
-    for seg in segments:
-        status = _segment_status(seg["id"], liked_keys)
-        result_segments.append({
-            "id": seg["id"],
-            "duration": seg["duration"],
-            "views": seg["views"],
-            "narrative_goal": seg["narrative_goal"],
-            **status,
-        })
-
-    return json.dumps({
-        "episode": episode,
-        "segment_count": len(segments),
-        "segments": result_segments,
-    }, ensure_ascii=False, indent=2)
+    return json.dumps(collect_episode_status(), ensure_ascii=False, indent=2)
 
 
 @function_tool
@@ -469,7 +354,7 @@ def plan_next_step() -> str:
     当用户问“下一步做什么”“我该跑什么”“接下来怎么办”时调用。
     本工具只返回命令建议，不执行命令。
     """
-    segments = _scan_segments()
+    segments = scan_segments()
 
     if not segments:
         return (
@@ -480,7 +365,7 @@ def plan_next_step() -> str:
             "--force"
         )
 
-    marks = _read_marks()
+    marks = read_marks()
     liked_keys = set(marks.get("liked", []))
 
     pending_generation = []
@@ -488,7 +373,7 @@ def plan_next_step() -> str:
     reviewed = []
 
     for seg in segments:
-        status = _segment_status(seg["id"], liked_keys)
+        status = segment_status(seg["id"], liked_keys)
         if status["status"] == "pending":
             pending_generation.append(seg["id"])
         elif status["status"] == "generated":
@@ -534,14 +419,14 @@ def summarize_review() -> str:
 
     当用户问“review 标记了几段”“还有哪段没挑”“哪些已选好”时调用。
     """
-    episode = _read_episode_id()
-    segments = _scan_segments()
-    marks = _read_marks()
+    episode = read_episode_id()
+    segments = scan_segments()
+    marks = read_marks()
     liked_keys = set(marks.get("liked", []))
 
     rows = []
     for seg in segments:
-        status = _segment_status(seg["id"], liked_keys)
+        status = segment_status(seg["id"], liked_keys)
         rows.append({
             "id": seg["id"],
             "status": status["status"],
@@ -650,7 +535,7 @@ def list_generations() -> str:
 # ============================================================
 
 INSTR_ROLE_AND_ROUTING = (
-    "你是一名动画制作助手。"
+    "你是 Reelwright（影匠）里的 Storyboarder，一名分镜编排助手。"
     "当用户询问项目的画幅、目标时长、"
     "角色风格或其他项目资料时，"
     "调用 get_project_info 查询真实项目文件。"
@@ -873,7 +758,7 @@ def build_agent(api_key_override: str = ""):
     )
 
     agent = Agent(
-        name="动画制作助手",
+        name="Storyboarder",
         instructions=INSTRUCTIONS,
         model=model,
         tools=[
@@ -1019,6 +904,31 @@ async def chat(message, history, api_key):
         await client.close()
 
 
+def _refresh_status():
+    """项目状态 Tab 的刷新函数：返回 Markdown 摘要 + 原始 JSON。"""
+    data = collect_episode_status()
+
+    lines = [f"### 当前集：{data['episode']}", ""]
+    lines.append(f"共 {data['segment_count']} 段。")
+    lines.append("")
+
+    if data["segments"]:
+        lines.append("| 段 | 状态 | 批次数 | 视频数 | 最新批次 | 已标记 |")
+        lines.append("|---|---|---|---|---|---|")
+        for seg in data["segments"]:
+            lines.append(
+                f"| {seg['id']} | {seg['status']} | "
+                f"{seg['batch_count']} | {seg['video_count']} | "
+                f"{seg['latest_batch'] or '-'} | {len(seg['liked'])} |"
+            )
+    else:
+        lines.append(
+            "还没有 segments。先运行 `plan_segments.py` 生成分镜。"
+        )
+
+    return "\n".join(lines), data
+
+
 _startup_config = _read_config()
 _active_provider_config = _resolve_provider_config(
     _startup_config,
@@ -1034,36 +944,55 @@ key_input = gr.Textbox(
 )
 
 with gr.Blocks(
-    title="动画制作 Agent",
+    title="Reelwright · 影匠",
+    fill_height=True,
 ) as demo:
-    gr.ChatInterface(
-        fn=chat,
-        title="动画制作 Agent",
-        description="输入问题，让 Agent 查询项目资料并回答。",
-        additional_inputs=[key_input],
-        additional_inputs_accordion="模型设置",
-    )
+    with gr.Tabs():
+        with gr.Tab("对话"):
+            gr.ChatInterface(
+                fn=chat,
+                title="Reelwright · 影匠",
+                description="输入问题，让 Agent 查询项目资料并回答。",
+                fill_height=True,
+                additional_inputs=[key_input],
+                additional_inputs_accordion="模型设置",
+            )
 
-    with gr.Row():
-        provider_dropdown = gr.Dropdown(
-            choices=_provider_choices,
-            value=_default_provider,
-            label="大模型平台",
-        )
-        save_settings_btn = gr.Button("保存设置", scale=0)
-        save_settings_status = gr.Markdown("")
+            with gr.Row():
+                provider_dropdown = gr.Dropdown(
+                    choices=_provider_choices,
+                    value=_default_provider,
+                    label="大模型平台",
+                )
+                save_settings_btn = gr.Button("保存设置", scale=0)
+                save_settings_status = gr.Markdown("")
 
-    provider_dropdown.change(
-        fn=_switch_active_provider,
-        inputs=[provider_dropdown],
-        outputs=[key_input, save_settings_status],
-    )
+            provider_dropdown.change(
+                fn=_switch_active_provider,
+                inputs=[provider_dropdown],
+                outputs=[key_input, save_settings_status],
+            )
 
-    save_settings_btn.click(
-        fn=_save_api_key_from_ui,
-        inputs=[key_input],
-        outputs=[save_settings_status],
-    )
+            save_settings_btn.click(
+                fn=_save_api_key_from_ui,
+                inputs=[key_input],
+                outputs=[save_settings_status],
+            )
+
+        with gr.Tab("项目状态"):
+            with gr.Row():
+                refresh_status_btn = gr.Button("刷新状态", scale=0)
+            status_md = gr.Markdown("加载中...")
+            status_json = gr.JSON(label="原始数据", value={})
+
+            refresh_status_btn.click(
+                fn=_refresh_status,
+                outputs=[status_md, status_json],
+            )
+            demo.load(
+                fn=_refresh_status,
+                outputs=[status_md, status_json],
+            )
 
 
 if __name__ == "__main__":
