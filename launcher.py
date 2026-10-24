@@ -15,6 +15,11 @@ IS_FROZEN = getattr(sys, 'frozen', False)
 
 if IS_FROZEN:
     ROOT = Path(sys.executable).resolve().parent
+    # 打包成无黑框后，print 会因为没有终端而报错，重定向到 logs 目录
+    log_dir = ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    sys.stdout = open(log_dir / "stdout.log", "w", encoding="utf-8")
+    sys.stderr = open(log_dir / "stderr.log", "w", encoding="utf-8")
 else:
     ROOT = Path(__file__).resolve().parent
 
@@ -51,6 +56,8 @@ def _spawn(args: list, log_path: Path) -> subprocess.Popen:
         cwd=str(ROOT),
         stdout=log_file,
         stderr=subprocess.STDOUT,
+        # 确保 Windows 下子进程也不弹黑框
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     proc._log_file = log_file
     return proc
