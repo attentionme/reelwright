@@ -1,19 +1,22 @@
 subject_definitions:
-- <Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
-- <Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
+<Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
+<Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
 
 summary:
-[keyframe completion] 桃子 points out that this is the third time he has wiped the same spot, 小满's hand stops dead on the table, and after a silent beat he answers her flat accusation with the same two words.
+[reference generation] This segment closes the evening conversation: 桃子 says outright that something is wrong, 小满 denies it, silence hangs, and then he shifts the subject to dinner and stands up. This segment has three views: a wide view of the room, a close view of 小满's face during the silence, and a return to the wide view.
 
 retention_analysis:
-- <Subject 1> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 1> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
-- <Subject 2> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 2> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+<Subject 1> (appears in view 1, view 2, view 3): fully_preserved - preserve every visual detail from <Picture 1>.
+<Subject 2> (appears in view 1, view 3): fully_preserved - preserve every visual detail from <Picture 2>.
 
 detailed_description:
-The video begins exactly from the previous segment's final frame, which shows: <Subject 1> rubbing one spot of the dining table with a folded rag while <Subject 2> looks down at the tabletop, framed low and close to the wood surface. The camera rises slowly to eye level and tightens onto <Subject 1>'s face. <Subject 2> watches his hand move back and forth, (S2) says: <d>[Chinese] 你已经擦第三遍了。</d> <Subject 1>'s hand stops in the middle of the stroke; the rag stays pressed on the spot, and he says nothing, jaw tight, eyes lowered. The room goes quiet for a beat, her mug still on the table. <Subject 2> steps fully into frame beside him, her voice softer now, (S2) says: <d>[Chinese] 你有事。</d> <Subject 1> keeps his head down and answers quietly, (S1) says: <d>[Chinese] 没事。</d> The camera holds on his lowered face with the crumpled rag still under his palm. Current sound: room tone drops lower, the clock ticking becomes prominent, one small damp cloth squelch as his hand stops.
+The video begins exactly from the previous segment's final frame, which shows: the wide view of the living room, 小满 standing at the low table with the cloth resting still on the clean surface, and 桃子 on the sofa watching him. This view lasts about 4 seconds. (S2) says: <d>你有事。</d> (S1) says: <d>没事。</d>
+Then the view changes to a close look at 小满's face, his eyes lowered and fixed on the table, his jaw tight, the cloth still under his fingers. He stays silent for a couple of seconds, blinks once, then lifts his head slightly and speaks in a flat, quiet voice. This view lasts about 4 seconds. (S1) says: <d>饭吃了吗？</d>
+Then the view changes back to the wide view of the living room. 桃子 answers from the sofa without looking away from him, and 小满 sets the folded cloth down at the edge of the table and straightens up, his body turning slightly toward the kitchen side of the room. This view lasts about 5 seconds. (S2) says: <d>没。</d> (S1) says: <d>那先吃饭。</d> (S2) says: <d>你呢？</d> (S1) says: <d>我也吃。</d> The camera holds on this view as 桃子 slowly rises from the sofa and 小满 stands beside the clean table.
+Nothing written appears anywhere in the frame at any moment.
 
 overall_soundscape:
-Very quiet apartment ambience, a prominent wall clock tick, one soft cloth squelch as the wiping stops, faint distant traffic, restrained breathing. No background music.
+Quiet apartment room tone, the soft cloth being folded and set on wood, a long stretch of near silence with a faint clock tick, then the light creak of the sofa and footsteps on the floor as they move. No background music.
 
 non_diegetic_music:
 N/A

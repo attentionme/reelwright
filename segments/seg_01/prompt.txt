@@ -1,19 +1,22 @@
 subject_definitions:
-- <Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
-- <Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
+<Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
+<Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
 
 summary:
-[reference generation] In a warm lamplit apartment at night, 桃子 stands over the dining table and presses 小满 about his silence, while he sits with a folded rag under his hand and answers her with single flat words.
+[reference generation] This segment opens the story in a small apartment living room at night, where 桃子 questions 小满 about his silence while he keeps wiping the low table. This segment has three views: a wide view of the room, a close view of 小满's hand and the cloth on the tabletop, and a return to the wide view.
 
 retention_analysis:
-- <Subject 1> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 1> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
-- <Subject 2> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 2> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+<Subject 1> (appears in view 1, view 2, view 3): fully_preserved - preserve every visual detail from <Picture 1>.
+<Subject 2> (appears in view 1, view 3): fully_preserved - preserve every visual detail from <Picture 2>.
 
 detailed_description:
-Interior of a small apartment living room in the evening. A wooden dining table sits at frame left, a floor lamp beside the sofa casts warm yellow light, and behind the two characters a dark window shows blurred night city lights. <Subject 2> stands at frame right, three steps from the table, a mug in one hand, her body angled toward <Subject 1>. <Subject 1> sits at the near side of the table, a folded rag lying under his right hand on the tabletop, shoulders slightly forward, eyes down. The camera holds a medium two-shot and pushes in slowly. <Subject 2> studies his face and says, (S2) says: <d>[Chinese] 你今天怎么了？</d> <Subject 1> does not lift his head, (S1) says: <d>[Chinese] 没怎么。</d> <Subject 2> sets the mug down on the table and takes one step closer, (S2) says: <d>[Chinese] 你今天一句话都没说。</d> <Subject 1> exhales once through his nose, fingers pressing flat on the rag, (S1) says: <d>[Chinese] 累。</d> The camera settles into a tighter two-shot; neither of them moves for a beat. Current sound: quiet room tone, a wall clock ticking, faint traffic outside, the soft rustle of the rag.
+The video starts with a wide view of a small apartment living room at night, lit by a single warm ceiling lamp. 桃子 sits on the sofa on the left side of the frame, leaning slightly forward with her hands on her knees, turned toward the right. 小满 stands at the low wooden table on the right side of the frame, holding a cloth and wiping the tabletop in slow repeated strokes, his head down. This view lasts about 5 seconds. (S2) says: <d>你今天怎么了？</d> (S1) says: <d>没怎么。</d>
+Then the view changes to a close look at the low wooden tabletop and 小满's hand pressing a folded cloth, moving back and forth over the same small area, the fingers tense, the wood already dry and clean. This view lasts about 4 seconds. (S2) says: <d>你今天一句话都没说。</d> (S1) says: <d>累。</d>
+Then the view changes back to the wide view of the living room, 桃子 still on the sofa with her eyes following him, 小满 still standing at the table with the cloth in his hand, shoulders slightly hunched. This view lasts about 4 seconds. (S2) says: <d>工作出问题了？</d> (S1) says: <d>没有。</d> The camera holds on this view.
+Nothing written appears anywhere in the frame at any moment.
 
 overall_soundscape:
-Quiet apartment room tone with a wall clock ticking, faint night traffic through the window, small cloth rustle and subtle clothing movement. No background music.
+Quiet apartment room tone, the soft rhythmic rubbing of cloth against dry wood, a faint distant traffic hum through the window, small breathing sounds. No background music.
 
 non_diegetic_music:
 N/A

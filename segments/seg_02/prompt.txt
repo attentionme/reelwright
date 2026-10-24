@@ -1,19 +1,22 @@
 subject_definitions:
-- <Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
-- <Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
+<Subject 1> is 小满, the young man in <Picture 1>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 1>. The character must be rendered in the exact 2D hand-drawn style of <Picture 1>, with clean dark outlines and flat colors.
+<Subject 2> is 桃子, the young woman in <Picture 2>, with all facial features, hairstyle, clothing, body proportions, and art style preserved exactly from <Picture 2>. The character must be rendered in the exact 2D hand-drawn style of <Picture 2>, with clean dark outlines and flat colors.
 
 summary:
-[keyframe completion] 桃子 continues her questioning as she leans over the table, and when she points out that he started wiping the table the moment he came home, 小满 answers by rubbing the same spot with the rag.
+[reference generation] This segment continues the same evening in the living room as 桃子 keeps questioning and at last points out the endless wiping, and 小满's hand freezes. This segment has three views: a wide view of the room, a close view of the cloth on the tabletop, and a return to the wide view.
 
 retention_analysis:
-- <Subject 1> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 1> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
-- <Subject 2> (appears in [Shot 1]): fully_preserved - preserve every visual detail from <Picture 2> including face shape, eye shape, hairstyle, clothing color and cut, body proportions, and 2D hand-drawn line style.
+<Subject 1> (appears in view 1, view 3): fully_preserved - preserve every visual detail from <Picture 1>.
+<Subject 2> (appears in view 1, view 3): fully_preserved - preserve every visual detail from <Picture 2>.
 
 detailed_description:
-The video begins exactly from the previous segment's final frame, which shows: <Subject 2> standing one step from the dining table with her mug set down on it, and <Subject 1> seated with his right hand flat on a folded rag, both held in a tight two-shot under warm lamp light. The camera drifts in a slow small arc to the left, keeping both faces in frame. <Subject 2> leans slightly forward, (S2) says: <d>[Chinese] 工作出问题了？</d> <Subject 1> shakes his head once, (S1) says: <d>[Chinese] 没有。</d> <Subject 2> tries again, (S2) says: <d>[Chinese] 和同事吵架？</d> <Subject 1> answers at once without looking up, (S1) says: <d>[Chinese] 没有。</d> <Subject 2> glances down at the tabletop and back at him, (S2) says: <d>[Chinese] 那你为什么一进门就开始擦桌子？</d> The camera settles low and close to the table surface as <Subject 1> finally lifts the rag and rubs one spot of the wood, (S1) says: <d>[Chinese] 桌子脏。</d> His sleeve and the cloth move back and forth across the wood grain. Current sound: room tone, cloth sliding over wood, faint night traffic outside.
+The video begins exactly from the previous segment's final frame, which shows: the wide view of the living room, 桃子 sitting on the sofa leaning toward 小满, and 小满 standing at the low table with the cloth in his hand, looking down at the tabletop. This view lasts about 5 seconds. (S2) says: <d>和同事吵架？</d> (S1) says: <d>没有。</d>
+Then the view changes to a close look at the tabletop, where the folded cloth is dragged across the polished wood in a slow circle, leaving no dust behind, 小满's fingers gripping the fabric a little too hard. This view lasts about 4 seconds. (S2) says: <d>那你为什么一进门就开始擦桌子？</d> (S1) says: <d>桌子脏。</d>
+Then the view changes back to the wide view of the living room. 桃子's gaze drops to the table and then lifts back to his face; 小满's hand slows and stops, the cloth resting on the clean surface, his mouth closed. This view lasts about 4 seconds. (S2) says: <d>你已经擦第三遍了。</d> The camera holds on this view as 小满 stays completely still with the cloth in his hand.
+Nothing written appears anywhere in the frame at any moment.
 
 overall_soundscape:
-Low apartment room tone, the clock still ticking, cloth dragging over wooden tabletop, quiet breathing and small fabric movement. No background music.
+Quiet room tone, the dry swish of cloth on wood that stops abruptly, a faint clock tick, the rustle of fabric as 桃子 shifts on the sofa. No background music.
 
 non_diegetic_music:
 N/A
