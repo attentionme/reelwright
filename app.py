@@ -27,6 +27,7 @@ from tools import (
 from episode_state import (
     read_episode_id,
     scan_segments,
+    scan_batches,
     read_marks,
     segment_status,
     collect_episode_status,
@@ -36,6 +37,7 @@ from task_manager import (
     start_task,
     check_task,
     list_tasks,
+    stop_task,
     comfyui_online,
 )
 
@@ -993,6 +995,26 @@ def _launch_generation(segment, count, megapixels, force, trial):
     if not segment:
         return "请先选择要生成的段。"
 
+    # 防重复：已有 pipeline / run_episode 在跑时阻止，避免显存竞争
+    try:
+        existing = list_tasks(limit=20)
+    except Exception:
+        existing = []
+
+    running = [
+        t for t in existing
+        if t.get("status") == "running"
+        and t.get("script") in {"pipeline.py", "run_episode.py"}
+    ]
+    if running:
+        ids = "、".join(f"`{t['task_id']}`" for t in running[:3])
+        more = f" 等 {len(running)} 个" if len(running) > 3 else ""
+        return (
+            f"⚠️ 已有任务正在跑：{ids}{more}。\n\n"
+            "为避免显存竞争，请等它们完成，"
+            "或在「后台任务」区选中后点「停止任务」。"
+        )
+
     if not comfyui_online():
         return (
             "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
@@ -1082,6 +1104,59 @@ def _show_task_log(task_id):
     )
     return header + content
 
+def _stop_task_from_ui(task_id):
+    """UI 停止按钮：调用 task_manager.stop_task。"""
+    if not task_id:
+        return "请先选择任务。"
+
+    try:
+        result = stop_task(task_id)
+    except Exception as exc:
+        return f"停止失败：{type(exc).__name__}: {exc}"
+
+    if "error" in result:
+        return f"停止失败：{result['error']}"
+
+    task = result.get("task", {})
+    killed = "已杀进程树" if result.get("killed") else "进程已死，只改状态"
+    return f"已停止任务 `{task_id}`（{killed}，状态 → {task.get('status')}）。"
+
+
+def _open_review_page(segment):
+    """打开指定段最新批次的 review.html。
+
+    pywebview 启动时会 patch 标准库 webbrowser，让 open() 在应用内部开新窗口；
+    而它要求主线程调用，Gradio 回调在工作线程，会导致静默失败。
+    所以 Windows 下改用 os.startfile 直接交给系统默认程序。
+    """
+    if not segment:
+        return "请先选择段。"
+
+    batches = scan_batches(segment)
+    if not batches:
+        return f"{segment} 还没有批次，先启动一次生成。"
+
+    latest = batches[0]["name"]
+    review = Path(__file__).resolve().parent / "batches" / latest / "review.html"
+    if not review.exists():
+        return f"审片页不存在：{review}"
+
+    import sys
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(review))
+        else:
+            import webbrowser
+            webbrowser.open(review.as_uri())
+    except Exception as exc:
+        return (
+            f"打开失败：{type(exc).__name__}: {exc}\n"
+            f"路径：`{review}`\n"
+            "可以手动复制这个路径到资源管理器打开。"
+        )
+
+    return f"已在系统浏览器打开：`batches/{latest}/review.html`"
+
 _startup_config = _read_config()
 _active_provider_config = _resolve_provider_config(
     _startup_config,
@@ -1138,9 +1213,16 @@ with gr.Blocks(
             status_md = gr.Markdown("加载中...")
             status_json = gr.JSON(label="原始数据", value={})
 
-            gr.Markdown("---")
-            gr.Markdown("### 后台任务")
+            refresh_status_btn.click(
+                fn=_refresh_status,
+                outputs=[status_md, status_json],
+            )
+            demo.load(
+                fn=_refresh_status,
+                outputs=[status_md, status_json],
+            )
 
+        with gr.Tab("后台任务"):
             with gr.Row():
                 refresh_tasks_btn = gr.Button("刷新任务", scale=0)
 
@@ -1155,10 +1237,15 @@ with gr.Blocks(
             with gr.Row():
                 task_id_dropdown = gr.Dropdown(
                     choices=[],
-                    label="选择任务查看日志",
+                    label="选择任务",
                     scale=3,
                 )
                 view_log_btn = gr.Button("查看日志", scale=1)
+                stop_task_btn = gr.Button(
+                    "停止任务", scale=1, variant="stop"
+                )
+
+            task_msg = gr.Markdown("")
 
             task_log = gr.Textbox(
                 label="任务日志（尾部 5000 字节）",
@@ -1199,57 +1286,79 @@ with gr.Blocks(
 
             gen_msg = gr.Markdown("")
 
-            # 状态区
-            refresh_status_btn.click(
-                fn=_refresh_status,
-                outputs=[status_md, status_json],
-            )
-            demo.load(
-                fn=_refresh_status,
-                outputs=[status_md, status_json],
-            )
-
-            # 初始化段下拉框
-            demo.load(
-                fn=_segment_choices,
-                outputs=[gen_segment],
-            )
-
-            # 初始化任务表
+            demo.load(fn=_segment_choices, outputs=[gen_segment])
             demo.load(
                 fn=_refresh_tasks_full,
                 outputs=[task_table, task_id_dropdown],
             )
 
-            # 手动刷新任务
             refresh_tasks_btn.click(
                 fn=_refresh_tasks_full,
                 outputs=[task_table, task_id_dropdown],
             )
 
-            # 查看日志
             view_log_btn.click(
                 fn=_show_task_log,
                 inputs=[task_id_dropdown],
                 outputs=[task_log],
             )
 
-            # 启动生成 -> 显示消息 -> 刷新任务表
+            stop_task_btn.click(
+                fn=_stop_task_from_ui,
+                inputs=[task_id_dropdown],
+                outputs=[task_msg],
+            ).then(
+                fn=_refresh_tasks_full,
+                outputs=[task_table, task_id_dropdown],
+            )
+
             gen_btn.click(
                 fn=_launch_generation,
-                inputs=[gen_segment, gen_count, gen_megapixels, gen_force, gen_trial],
+                inputs=[
+                    gen_segment, gen_count, gen_megapixels,
+                    gen_force, gen_trial,
+                ],
                 outputs=[gen_msg],
             ).then(
                 fn=_refresh_tasks_full,
                 outputs=[task_table, task_id_dropdown],
             )
 
-            # 每 5 秒自动刷新（只刷表格，不打断下拉框选择）
-            task_timer = gr.Timer(value=5, active=True)
-            task_timer.tick(
-                fn=_refresh_tasks_table,
-                outputs=[task_table],
+        with gr.Tab("审片"):
+            gr.Markdown(
+                "点「打开最新审片页」会在系统浏览器打开"
+                "该段最新批次的 `review.html`。"
+                "挑片完成后点页面里的「导出本集全部标记」，"
+                "把下载的 `review_marks.json` 覆盖到项目根目录。"
             )
+
+            with gr.Row():
+                review_segment = gr.Dropdown(
+                    choices=[],
+                    label="段",
+                    scale=2,
+                )
+                open_review_btn = gr.Button(
+                    "打开最新审片页", scale=1, variant="primary"
+                )
+
+            review_msg = gr.Markdown("")
+
+            demo.load(fn=_segment_choices, outputs=[review_segment])
+
+            open_review_btn.click(
+                fn=_open_review_page,
+                inputs=[review_segment],
+                outputs=[review_msg],
+            )
+
+    # Timer 放在 Tabs 外面，不管当前在哪个 Tab 都持续 tick，
+    # 保证切回「后台任务」时 task_table 是最新的。
+    task_timer = gr.Timer(value=5, active=True)
+    task_timer.tick(
+        fn=_refresh_tasks_table,
+        outputs=[task_table],
+    )
 
 
 if __name__ == "__main__":

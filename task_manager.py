@@ -46,7 +46,14 @@ def _tail_log(path: Path, n_bytes: int = 3000) -> str:
     with path.open("rb") as f:
         if size > n_bytes:
             f.seek(size - n_bytes)
-        return f.read().decode("utf-8", errors="replace")
+        raw = f.read()
+
+    for enc in ("utf-8-sig", "gbk", "utf-16"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def comfyui_online(timeout: float = 3.0) -> bool:
@@ -142,3 +149,47 @@ def list_tasks(limit: int = 10) -> list:
         if len(tasks) >= limit:
             break
     return tasks
+
+
+def stop_task(task_id: str) -> dict:
+    """停止一个 running 任务：杀进程树 + 把状态写回 failed。
+
+    对 pipeline.py -> batch_run.py 这种父子结构，taskkill /T 会杀整棵树。
+    pid 已死或杀失败时仍然改状态，避免任务永远卡在 running。
+    """
+    p = _task_path(task_id)
+    if not p.exists():
+        return {"error": f"任务不存在：{task_id}"}
+
+    task = json.loads(p.read_text(encoding="utf-8"))
+
+    if task.get("status") != "running":
+        return {
+            "error": f"任务状态为 {task.get('status')}，不是 running",
+            "task": task,
+        }
+
+    pid = task.get("pid")
+    killed = False
+    if pid and _is_alive(pid):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(pid), "/T"],
+                capture_output=True, timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            killed = True
+        except Exception:
+            pass
+
+    task["status"] = "failed"
+    task["end_time"] = datetime.now().isoformat(timespec="seconds")
+    task["note"] = (
+        "manual: stopped by user (pid killed)"
+        if killed
+        else "manual: stopped by user (pid already dead)"
+    )
+    _task_path(task_id).write_text(
+        json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"ok": True, "task": task, "killed": killed}
