@@ -32,6 +32,12 @@ from episode_state import (
     collect_episode_status,
 )
 
+from task_manager import (
+    start_task,
+    check_task,
+    list_tasks,
+    comfyui_online,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -928,6 +934,153 @@ def _refresh_status():
 
     return "\n".join(lines), data
 
+def _segment_choices():
+    """返回段 Dropdown 的 choices（用于 demo.load 初始化）。"""
+    segs = scan_segments()
+    choices = [s["id"] for s in segs]
+    return gr.update(
+        choices=choices,
+        value=choices[0] if choices else None,
+    )
+
+
+def _collect_tasks():
+    """内部：返回 (rows, choices)。对 running 任务调 check_task 刷新状态。"""
+    try:
+        tasks = list_tasks(limit=10)
+    except Exception as exc:
+        return [[f"error: {type(exc).__name__}", str(exc), "", ""]], []
+
+    rows = []
+    choices = []
+    for task in tasks:
+        if task.get("status") == "running":
+            try:
+                task = check_task(task["task_id"])
+            except Exception:
+                pass
+
+        tid = task.get("task_id", "")
+        rows.append([
+            tid,
+            task.get("script", ""),
+            task.get("status", ""),
+            task.get("start_time", ""),
+        ])
+        if tid:
+            choices.append(tid)
+
+    return rows, choices
+
+
+def _refresh_tasks_table():
+    """Timer 用：只更新表格，不动下拉框，避免打断用户选择。"""
+    rows, _ = _collect_tasks()
+    return rows
+
+
+def _refresh_tasks_full():
+    """手动刷新 / 启动生成后用：表格 + 下拉框都更新。"""
+    rows, choices = _collect_tasks()
+    return rows, gr.update(
+        choices=choices,
+        value=choices[0] if choices else None,
+    )
+
+
+def _launch_generation(segment, count, megapixels, force, trial):
+    """从 UI 启动一次生成（pipeline.py），后台运行。"""
+    if not segment:
+        return "请先选择要生成的段。"
+
+    if not comfyui_online():
+        return (
+            "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
+            "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
+        )
+
+    try:
+        count = int(count) if count else 2
+    except (TypeError, ValueError):
+        count = 2
+
+    try:
+        megapixels = float(megapixels) if megapixels else 1.5
+    except (TypeError, ValueError):
+        megapixels = 1.5
+
+    args = [
+        "--segment", str(segment),
+        "--count", str(count),
+        "--megapixels", str(megapixels),
+    ]
+    if force:
+        args.append("--force")
+    if trial:
+        args.append("--trial")
+
+    try:
+        task = start_task("pipeline.py", args, check_comfy=False)
+    except Exception as exc:
+        return f"启动失败：{type(exc).__name__}: {exc}"
+
+    trial_note = "trial 模式（5s / 1.0MP / 1 候选）" if trial else f"count={count}"
+    return (
+        f"已启动任务 `{task['task_id']}`：{segment}，{trial_note}。\n\n"
+        "后台运行中。表格每 5 秒自动刷新，或点「刷新任务」立即更新。"
+    )
+
+
+def _show_task_log(task_id):
+    """读取指定任务的日志尾部（5000 字节）。"""
+    if not task_id:
+        return "请先选择任务。"
+
+    try:
+        task = check_task(task_id)
+    except Exception as exc:
+        return f"读取失败：{type(exc).__name__}: {exc}"
+
+    if "error" in task:
+        return task["error"]
+
+    log_path = task.get("log")
+    if not log_path:
+        return "该任务没有关联日志文件。"
+
+    p = Path(log_path)
+    if not p.exists():
+        return f"日志文件不存在：{log_path}"
+
+    n_bytes = 5000
+    try:
+        size = p.stat().st_size
+        with p.open("rb") as f:
+            if size > n_bytes:
+                f.seek(size - n_bytes)
+            raw = f.read()
+    except Exception as exc:
+        return f"读取日志失败：{type(exc).__name__}: {exc}"
+
+    content = None
+    for enc in ("utf-8-sig", "gbk", "utf-16"):
+        try:
+            content = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if content is None:
+        content = raw.decode("utf-8", errors="replace")
+
+    header = (
+        f"task_id: {task.get('task_id')}\n"
+        f"script:  {task.get('script')}\n"
+        f"status:  {task.get('status')}\n"
+        f"start:   {task.get('start_time')}\n"
+        f"log:     {log_path}\n"
+        f"--- 尾部 {n_bytes} 字节 ---\n\n"
+    )
+    return header + content
 
 _startup_config = _read_config()
 _active_provider_config = _resolve_provider_config(
@@ -985,6 +1138,68 @@ with gr.Blocks(
             status_md = gr.Markdown("加载中...")
             status_json = gr.JSON(label="原始数据", value={})
 
+            gr.Markdown("---")
+            gr.Markdown("### 后台任务")
+
+            with gr.Row():
+                refresh_tasks_btn = gr.Button("刷新任务", scale=0)
+
+            task_table = gr.Dataframe(
+                headers=["任务 ID", "脚本", "状态", "开始时间"],
+                datatype=["str", "str", "str", "str"],
+                value=[],
+                interactive=False,
+                label="最近 10 个任务（每 5 秒自动刷新）",
+            )
+
+            with gr.Row():
+                task_id_dropdown = gr.Dropdown(
+                    choices=[],
+                    label="选择任务查看日志",
+                    scale=3,
+                )
+                view_log_btn = gr.Button("查看日志", scale=1)
+
+            task_log = gr.Textbox(
+                label="任务日志（尾部 5000 字节）",
+                lines=12,
+                max_lines=25,
+                interactive=False,
+            )
+
+            gr.Markdown("### 启动新生成")
+
+            with gr.Row():
+                gen_segment = gr.Dropdown(
+                    choices=[],
+                    label="段",
+                    scale=2,
+                )
+                gen_count = gr.Number(
+                    value=2,
+                    label="候选数",
+                    precision=0,
+                    minimum=1,
+                    maximum=8,
+                    scale=1,
+                )
+                gen_megapixels = gr.Number(
+                    value=1.5,
+                    label="MP",
+                    precision=2,
+                    minimum=0.5,
+                    maximum=3.0,
+                    scale=1,
+                )
+
+            with gr.Row():
+                gen_force = gr.Checkbox(value=True, label="force（忽略缓存）")
+                gen_trial = gr.Checkbox(value=False, label="trial（5s 快速试验）")
+                gen_btn = gr.Button("启动生成", variant="primary", scale=1)
+
+            gen_msg = gr.Markdown("")
+
+            # 状态区
             refresh_status_btn.click(
                 fn=_refresh_status,
                 outputs=[status_md, status_json],
@@ -992,6 +1207,48 @@ with gr.Blocks(
             demo.load(
                 fn=_refresh_status,
                 outputs=[status_md, status_json],
+            )
+
+            # 初始化段下拉框
+            demo.load(
+                fn=_segment_choices,
+                outputs=[gen_segment],
+            )
+
+            # 初始化任务表
+            demo.load(
+                fn=_refresh_tasks_full,
+                outputs=[task_table, task_id_dropdown],
+            )
+
+            # 手动刷新任务
+            refresh_tasks_btn.click(
+                fn=_refresh_tasks_full,
+                outputs=[task_table, task_id_dropdown],
+            )
+
+            # 查看日志
+            view_log_btn.click(
+                fn=_show_task_log,
+                inputs=[task_id_dropdown],
+                outputs=[task_log],
+            )
+
+            # 启动生成 -> 显示消息 -> 刷新任务表
+            gen_btn.click(
+                fn=_launch_generation,
+                inputs=[gen_segment, gen_count, gen_megapixels, gen_force, gen_trial],
+                outputs=[gen_msg],
+            ).then(
+                fn=_refresh_tasks_full,
+                outputs=[task_table, task_id_dropdown],
+            )
+
+            # 每 5 秒自动刷新（只刷表格，不打断下拉框选择）
+            task_timer = gr.Timer(value=5, active=True)
+            task_timer.tick(
+                fn=_refresh_tasks_table,
+                outputs=[task_table],
             )
 
 
