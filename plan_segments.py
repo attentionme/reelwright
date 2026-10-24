@@ -21,10 +21,10 @@ H3_SECTIONS = [
     "non_diegetic_music",
 ]
 
-# 单段安全时长上限（秒）。H3 单段约 362 帧 @ 24fps ≈ 15s，留 1s 余量
-MAX_SEGMENT_SECONDS = 14.0
-# 建议的每段时长范围（多视图节奏考虑）
-PREFERRED_SEGMENT_RANGE = (10.0, 14.0)
+# ── 段时长参数（只改这里）──
+MAX_SEGMENT_SECONDS = 11.0
+MIN_SEGMENT_SECONDS = 8.0
+PREFERRED_SEGMENT_RANGE = (MIN_SEGMENT_SECONDS, MAX_SEGMENT_SECONDS)
 
 
 def parse_args():
@@ -70,7 +70,7 @@ def build_system_prompt(ref_characters: list) -> str:
 ━━ SEGMENTATION RULES (MUST FOLLOW) ━━
 1. Prefer plot boundaries: a complete action, a dialogue exchange, or a scene change constitutes one segment.
 2. Hard limit: {MAX_SEGMENT_SECONDS:.0f} seconds per segment.
-3. Preferred duration: {PREFERRED_SEGMENT_RANGE[0]:.0f}–{PREFERRED_SEGMENT_RANGE[1]:.0f} seconds per segment. Each segment should feel unhurried and cinematic — do NOT cut a segment shorter than 10 seconds unless the plot boundary makes it impossible.
+3. Preferred duration: {PREFERRED_SEGMENT_RANGE[0]:.0f}–{PREFERRED_SEGMENT_RANGE[1]:.0f} seconds per segment. Each segment should feel unhurried — do NOT cut a segment shorter than {MIN_SEGMENT_SECONDS:.0f} seconds unless the plot boundary makes it impossible.
 4. Adjacent segments must be continuous: the next segment's narrative start = previous segment's narrative end state.
 5. Total segment count: 2–5.
 6. NEVER generate a "pure subtitle card", "black screen", or "end card" segment.
@@ -98,9 +98,9 @@ DO use natural language that describes WHAT IS VISIBLE, not HOW the camera moves
 ━━ VIEW DURATION BALANCE (CRITICAL) ━━
 
 Each view must last long enough for the audience to read what is happening.
-- With 2 views in a segment: each view lasts about half the segment duration (roughly 5–7 seconds).
-- With 3 views in a segment: each view lasts about one third of the segment duration (roughly 4–5 seconds).
-- Always write a rough duration hint in the detailed_description, e.g., "This view lasts about 5 seconds."
+- With 2 views in a segment: each view lasts about half the segment duration.
+- With 3 views in a segment: each view lasts about one third of the segment duration.
+- Always write a rough duration hint in the detailed_description, e.g., "This view lasts about 4 seconds."
 - Do NOT make any view shorter than 3 seconds. If a view would be shorter than 3 seconds, merge it into the neighbouring view instead.
 
 ━━ VIEW SELECTION RULES (SAFEST TO RISKIEST) ━━
@@ -137,7 +137,7 @@ subject_definitions:
 summary:
 - One short English paragraph.
 - Begin with `[reference generation]`.
-- Mention how many views this segment contains, e.g., "This segment has three views: a wide view of the room, a close view of a hand, and a return to the wide view."
+- Mention how many views this segment contains.
 
 retention_analysis:
 - One line per Subject.
@@ -171,7 +171,7 @@ non_diegetic_music:
     {{
       "id": "seg_01",
       "narrative_goal": "one sentence describing what this segment accomplishes",
-      "estimated_duration": 12.0,
+      "estimated_duration": {PREFERRED_SEGMENT_RANGE[0] + 1:.1f},
       "views": 2,
       "prompt": "complete six-section prompt",
       "refs": ["{ref_characters[0] if ref_characters else "role1.png"}", "{ref_characters[1] if len(ref_characters) > 1 else "role2.png"}"]
@@ -180,7 +180,7 @@ non_diegetic_music:
 }}
 
 REMEMBER:
-- Each segment should have 2–3 views, and total duration should be 10–14 seconds.
+- Each segment must be {MIN_SEGMENT_SECONDS:.0f}–{MAX_SEGMENT_SECONDS:.0f} seconds with 2–3 views.
 - From seg_02 onward, refs MUST include tail_from_seg_XX.png.
 - Only output JSON.
 """
@@ -199,9 +199,9 @@ def call_llm(client, model, system_prompt, script_text,
             "content": (
                 "Your previous output failed format validation:\n"
                 + "\n".join(f"- {p}" for p in problems)
-                + "\n\nPlease fix and output JSON again. "
-                  "Each segment must be 10–14 seconds with 2–3 views. "
-                  "Follow the six-section format EXACTLY."
+                + f"\n\nPlease fix and output JSON again. "
+                  f"Each segment must be {MIN_SEGMENT_SECONDS:.0f}–{MAX_SEGMENT_SECONDS:.0f} seconds "
+                  f"with 2–3 views. Follow the six-section format EXACTLY."
             ),
         })
 
@@ -327,10 +327,10 @@ def validate_segments(plan):
             problems.append(
                 f"{tag}: duration {seg['estimated_duration']} > {MAX_SEGMENT_SECONDS}"
             )
-        elif seg["estimated_duration"] < PREFERRED_SEGMENT_RANGE[0]:
+        elif seg["estimated_duration"] < MIN_SEGMENT_SECONDS:
             problems.append(
                 f"{tag}: duration {seg['estimated_duration']} < "
-                f"{PREFERRED_SEGMENT_RANGE[0]} (too short for multi-view pacing)"
+                f"{MIN_SEGMENT_SECONDS} (too short for multi-view pacing)"
             )
 
         for err in validate_h3_prompt(seg["prompt"]):

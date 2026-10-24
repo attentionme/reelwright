@@ -81,30 +81,66 @@ class WorkflowAdapter:
         resp = requests.post(
             f"{self.comfy_url}/prompt",
             json={"prompt": self.workflow},
-            timeout=30,
+            timeout=60,
         )
         resp.raise_for_status()
         return resp.json()["prompt_id"]
 
-    def wait(self, prompt_id: str, timeout_seconds: int = 1800, interval: int = 3) -> dict:
+    def wait(self, prompt_id: str, timeout_seconds: int = 3600, interval: int = 5) -> dict:
+        """
+        等待 ComfyUI 完成任务。
+
+        - 单次 /history 请求失败不判定任务失败，继续轮询。
+        - 超时后主动中断 ComfyUI 任务，避免"放弃等待但任务还在跑"占用显存。
+        """
         start = time.time()
+        last_error = None
+
         while time.time() - start < timeout_seconds:
-            resp = requests.get(
-                f"{self.comfy_url}/history/{prompt_id}",
+            try:
+                resp = requests.get(
+                    f"{self.comfy_url}/history/{prompt_id}",
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if prompt_id in data:
+                    return data[prompt_id]
+                last_error = None
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                print(f"  [warn] /history 请求失败，继续等待：{type(exc).__name__}")
+            time.sleep(interval)
+
+        # 超时了，主动中断 ComfyUI 的任务，避免它继续占用显存
+        print(f"  [timeout] 主动中断 ComfyUI 任务 {prompt_id}")
+        try:
+            requests.post(
+                f"{self.comfy_url}/interrupt",
                 timeout=10,
             )
-            resp.raise_for_status()
-            data = resp.json()
-            if prompt_id in data:
-                return data[prompt_id]
-            time.sleep(interval)
+        except Exception as exc:
+            print(f"  [warn] /interrupt 失败：{type(exc).__name__}")
+        try:
+            requests.post(
+                f"{self.comfy_url}/queue",
+                json={"delete": [prompt_id]},
+                timeout=10,
+            )
+        except Exception as exc:
+            print(f"  [warn] /queue 删除失败：{type(exc).__name__}")
+
         raise TimeoutError(
-            f"等待 {timeout_seconds} 秒仍未完成，prompt_id={prompt_id}"
+            f"等待 {timeout_seconds} 秒仍未完成，prompt_id={prompt_id}（已请求中断）"
+            + (f"，最后一次错误：{last_error}" if last_error else "")
         )
 
     def find_output(self, wait_seconds: int = 60) -> Path:
         """
         在 output_dir 下按本次 run 的 prefix 找最终视频文件。
+
+        VHS_VideoCombine 会先落 preview .png，再异步用 ffmpeg 编码 .mp4，
+        因此不能见到任何文件就返回，必须等到 mp4 出现。
 
         优先级：
             1. *-audio.mp4   （合并音频后的完整视频）
@@ -143,7 +179,7 @@ class WorkflowAdapter:
             "请确认 profile 里的 output_dir 指向 ComfyUI 的 output 目录。"
         )
 
-    def run_once(self, wait_seconds: int = 1800) -> Path:
+    def run_once(self, wait_seconds: int = 3600) -> Path:
         prompt_id = self.submit()
         print(f"[submit] prompt_id = {prompt_id}")
         self.wait(prompt_id, timeout_seconds=wait_seconds)
