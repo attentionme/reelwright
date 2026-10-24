@@ -1,8 +1,10 @@
 import copy
+import csv
 import gradio as gr
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -11,6 +13,7 @@ from agents import (
     Agent,
     Runner,
     OpenAIChatCompletionsModel,
+    function_tool,
     set_tracing_disabled,
 )
 
@@ -84,8 +87,6 @@ DEFAULT_CONFIG = {
 
 
 def _read_config() -> dict:
-    """读取 config.json，与默认结构逐 provider 深度合并。读取失败时回退到默认配置。"""
-
     if not CONFIG_PATH.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
 
@@ -122,8 +123,6 @@ def _read_config() -> dict:
 
 
 def _write_config(config: dict) -> None:
-    """原子写入 config.json，避免半写文件。"""
-
     tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
 
     with tmp_path.open("w", encoding="utf-8") as f:
@@ -133,19 +132,6 @@ def _write_config(config: dict) -> None:
 
 
 def _resolve_provider_config(config, provider_name=None) -> dict:
-    """
-    从 config 中解析指定 provider 的完整配置。
-
-    纯函数：不访问文件，不访问网络。
-
-    查找顺序：
-        1. 显式传入的 provider_name（若存在）
-        2. config["active_provider"]
-        3. "deepseek"
-
-    api_key 不回退：缺失即返回空字符串，由调用方决定如何处理。
-    """
-
     if not isinstance(config, dict):
         config = {}
 
@@ -223,17 +209,6 @@ def _resolve_provider_config(config, provider_name=None) -> dict:
 
 
 def _provider_options(config) -> tuple:
-    """
-    从 config 生成 Dropdown 的 choices 和默认选中项。
-
-    纯函数：不访问文件，不访问网络。
-
-    Returns:
-        (choices, default_value)
-        choices 是 [(display_name, provider_name), ...]，deepseek 永远排第一，
-        其余按 provider_name 字母序。
-    """
-
     if not isinstance(config, dict):
         config = {}
 
@@ -267,8 +242,6 @@ def _provider_options(config) -> tuple:
 
 
 def _save_api_key_from_ui(api_key: str) -> str:
-    """把 UI 中输入的 API Key 保存到当前 active_provider。"""
-
     config = _read_config()
     active_provider = config.get("active_provider", "deepseek")
 
@@ -283,10 +256,6 @@ def _save_api_key_from_ui(api_key: str) -> str:
 
 
 def _switch_active_provider(provider_name: str):
-    """
-    切换 active_provider，写入 config.json，并返回 UI 更新指令。
-    """
-
     config = _read_config()
     providers = config.get("providers", {})
 
@@ -317,8 +286,6 @@ def _switch_active_provider(provider_name: str):
 
 
 def _load_default_api_key() -> str:
-    """按 config.json > 环境变量 > .env 的顺序读取 API Key。"""
-
     config = _read_config()
     provider = _resolve_provider_config(config, config.get("active_provider"))
     key = provider["api_key"].strip()
@@ -354,12 +321,322 @@ def _load_default_api_key() -> str:
 
 DEFAULT_API_KEY = _load_default_api_key()
 
-# 这是个人本地应用，关闭不需要的远程追踪上传
 set_tracing_disabled(disabled=True)
 
 
 # ============================================================
-# Agent instructions：按主题分段
+# 集状态检查工具（只读，不执行任何生成脚本）
+# ============================================================
+
+def _read_episode_id() -> str:
+    p = Path(__file__).with_name("episode.txt")
+    if p.exists():
+        text = p.read_text(encoding="utf-8-sig").strip()
+        if text:
+            return text
+    return "ep01"
+
+
+def _scan_segments() -> list:
+    root = Path(__file__).with_name("segments")
+    if not root.exists():
+        return []
+
+    segs = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        if not re.fullmatch(r"seg_\d+", d.name):
+            continue
+
+        meta = {}
+        meta_path = d / "meta.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        segs.append({
+            "id": d.name,
+            "duration": meta.get("estimated_duration"),
+            "views": meta.get("views"),
+            "narrative_goal": meta.get("narrative_goal"),
+        })
+
+    segs.sort(key=lambda s: int(s["id"].split("_")[1]))
+    return segs
+
+
+def _scan_batches(seg_id: str) -> list:
+    root = Path(__file__).with_name("batches")
+    if not root.exists():
+        return []
+
+    compact = seg_id.replace("_", "")
+    batches = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        if not (
+            d.name.startswith(compact + "_")
+            or d.name.startswith(seg_id + "_")
+        ):
+            continue
+        mp4s = sorted(d.glob("*.mp4"))
+        if not mp4s:
+            continue
+        batches.append({
+            "name": d.name,
+            "videos": [m.name for m in mp4s],
+            "mtime": d.stat().st_mtime,
+        })
+
+    batches.sort(key=lambda b: b["mtime"], reverse=True)
+    return batches
+
+
+def _read_marks() -> dict:
+    p = Path(__file__).with_name("review_marks.json")
+    if not p.exists():
+        return {"episode": "", "liked": [], "rejected": []}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {"episode": "", "liked": [], "rejected": []}
+
+
+def _segment_status(seg_id: str, liked_keys: set) -> dict:
+    batches = _scan_batches(seg_id)
+    if not batches:
+        return {
+            "batch_count": 0,
+            "video_count": 0,
+            "latest_batch": None,
+            "liked": [],
+            "status": "pending",
+        }
+
+    seg_liked = [
+        k for k in liked_keys
+        if any(k.startswith(b["name"] + "/") for b in batches)
+    ]
+
+    return {
+        "batch_count": len(batches),
+        "video_count": sum(len(b["videos"]) for b in batches),
+        "latest_batch": batches[0]["name"],
+        "liked": seg_liked,
+        "status": "reviewed" if seg_liked else "generated",
+    }
+
+
+@function_tool
+def inspect_episode() -> str:
+    """
+    扫描当前集的分镜、批次、标记状态，返回结构化 JSON。
+
+    当用户问“现在什么状态”“跑到哪了”“哪段还没跑”“哪段还没标记”时调用。
+    """
+    episode = _read_episode_id()
+    segments = _scan_segments()
+    marks = _read_marks()
+    liked_keys = set(marks.get("liked", []))
+
+    result_segments = []
+    for seg in segments:
+        status = _segment_status(seg["id"], liked_keys)
+        result_segments.append({
+            "id": seg["id"],
+            "duration": seg["duration"],
+            "views": seg["views"],
+            "narrative_goal": seg["narrative_goal"],
+            **status,
+        })
+
+    return json.dumps({
+        "episode": episode,
+        "segment_count": len(segments),
+        "segments": result_segments,
+    }, ensure_ascii=False, indent=2)
+
+
+@function_tool
+def plan_next_step() -> str:
+    """
+    根据当前状态，返回下一步应该执行的命令。
+
+    当用户问“下一步做什么”“我该跑什么”“接下来怎么办”时调用。
+    本工具只返回命令建议，不执行命令。
+    """
+    segments = _scan_segments()
+
+    if not segments:
+        return (
+            "当前没有 segments。先运行：\n"
+            ".venv\\Scripts\\python.exe .\\plan_segments.py "
+            "--script script.txt "
+            "--ref-characters 小满1_2048.png,桃子1_2048.png "
+            "--force"
+        )
+
+    marks = _read_marks()
+    liked_keys = set(marks.get("liked", []))
+
+    pending_generation = []
+    pending_review = []
+    reviewed = []
+
+    for seg in segments:
+        status = _segment_status(seg["id"], liked_keys)
+        if status["status"] == "pending":
+            pending_generation.append(seg["id"])
+        elif status["status"] == "generated":
+            pending_review.append(seg["id"])
+        else:
+            reviewed.append(seg["id"])
+
+    lines = []
+
+    if pending_generation:
+        lines.append(
+            f"还有 {len(pending_generation)} 段没有生成："
+            f"{', '.join(pending_generation)}"
+        )
+        lines.append(
+            f"建议先跑：\n"
+            f".venv\\Scripts\\python.exe .\\pipeline.py "
+            f"--segment {pending_generation[0]} --count 2"
+        )
+    elif pending_review:
+        lines.append(
+            f"还有 {len(pending_review)} 段没有标记喜欢："
+            f"{', '.join(pending_review)}"
+        )
+        lines.append(
+            "建议打开对应的 review.html，点击喜欢的视频，"
+            "然后点「导出本集全部标记」，把 review_marks.json 覆盖到项目目录。"
+        )
+    else:
+        lines.append(f"全部 {len(segments)} 段都已标记喜欢。")
+        lines.append(
+            "下一步：\n"
+            ".venv\\Scripts\\python.exe .\\concat_episode.py"
+        )
+
+    return "\n".join(lines)
+
+
+@function_tool
+def summarize_review() -> str:
+    """
+    汇总 review_marks.json 的标记情况：哪些段标记了、哪些段没标记。
+
+    当用户问“review 标记了几段”“还有哪段没挑”“哪些已选好”时调用。
+    """
+    episode = _read_episode_id()
+    segments = _scan_segments()
+    marks = _read_marks()
+    liked_keys = set(marks.get("liked", []))
+
+    rows = []
+    for seg in segments:
+        status = _segment_status(seg["id"], liked_keys)
+        rows.append({
+            "id": seg["id"],
+            "status": status["status"],
+            "liked": status["liked"],
+        })
+
+    return json.dumps({
+        "episode": episode,
+        "total_liked": len(liked_keys),
+        "segments": rows,
+    }, ensure_ascii=False, indent=2)
+
+
+# ============================================================
+# 后台生成任务工具（真正执行，通过 task_manager.py）
+# ============================================================
+
+@function_tool
+def start_generation(
+    segment: str,
+    count: int = 2,
+    megapixels: float = 1.5,
+    force: bool = True,
+) -> str:
+    """
+    后台启动一段视频生成（pipeline.py），立即返回 task_id，不阻塞对话。
+
+    当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时调用。
+    本工具会在后台运行 pipeline.py，不会阻塞对话。启动后立即返回 task_id。
+    """
+    from task_manager import start_task
+
+    args = [
+        "--segment", segment,
+        "--count", str(count),
+        "--megapixels", str(megapixels),
+    ]
+    if force:
+        args.append("--force")
+
+    try:
+        task = start_task("pipeline.py", args)
+    except Exception as exc:
+        return json.dumps(
+            {"error": f"启动失败：{type(exc).__name__}: {exc}"},
+            ensure_ascii=False,
+        )
+
+    return json.dumps(task, ensure_ascii=False, indent=2)
+
+
+@function_tool
+def check_generation(task_id: str) -> str:
+    """
+    查询一个后台生成任务的状态。
+
+    当用户问“跑完了吗”“那个任务怎么样了”“seg_XX 跑完了吗”时调用。
+    状态为 running / done / failed。
+    """
+    from task_manager import check_task
+
+    try:
+        task = check_task(task_id)
+    except Exception as exc:
+        return json.dumps(
+            {"error": f"查询失败：{type(exc).__name__}: {exc}"},
+            ensure_ascii=False,
+        )
+
+    return json.dumps(task, ensure_ascii=False, indent=2)
+
+
+@function_tool
+def list_generations() -> str:
+    """
+    列出最近的后台生成任务。
+
+    当用户问“有哪些任务在跑”“最近跑了什么”“任务列表”时调用。
+    返回最近 10 个任务，按时间倒序。
+    """
+    from task_manager import list_tasks
+
+    try:
+        tasks = list_tasks()
+    except Exception as exc:
+        return json.dumps(
+            {"error": f"查询失败：{type(exc).__name__}: {exc}"},
+            ensure_ascii=False,
+        )
+
+    return json.dumps(tasks, ensure_ascii=False, indent=2)
+
+
+# ============================================================
+# Agent instructions
 # ============================================================
 
 INSTR_ROLE_AND_ROUTING = (
@@ -490,6 +767,45 @@ INSTR_DIRECTORY = (
     "不要替用户把它直接定性为「不合规」或「通过」。"
 )
 
+INSTR_AGENT_WORKFLOW = (
+    "当用户询问当前集的状态、进度、下一步该做什么、"
+    "或者 review 标记情况时，"
+    "调用 inspect_episode、plan_next_step、summarize_review "
+    "这三个工具获取真实数据。"
+    "不要凭记忆或猜测回答。"
+    "当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时，"
+    "调用 start_generation 工具，参数 segment=seg_XX，"
+    "count 默认 2，megapixels 默认 1.5，force 默认 True。"
+    "启动后立即告诉用户 task_id，"
+    "并说明“后台运行中，预计 20–30 分钟，稍后可以问我跑完了吗”。"
+    "不要阻塞等待完成，不要假装已经看到结果。"
+    "当用户问“跑完了吗”“那个任务怎么样了”“seg_XX 跑完了吗”时，"
+    "调用 check_generation，传用户提到的 task_id；"
+    "如果用户没提 task_id，先调用 list_generations 找到最近的 running 任务。"
+    "任务状态为 done 时，告诉用户“已完成”，"
+    "并从 log_tail 里提取关键信息（生成了几个候选、审片页面路径）。"
+    "任务状态为 failed 时，告诉用户“失败了”，"
+    "并贴出 log_tail 尾部的错误信息，"
+    "建议用户检查 ComfyUI 是否在线、显存是否足够。"
+    "当用户问“有哪些任务在跑”“最近跑了什么”时，调用 list_generations。"
+    "如果用户要求“帮我跑一段”但你没有 start_generation 工具，"
+    "必须给出完整、可直接复制粘贴的命令，"
+    "格式为：.venv\\Scripts\\python.exe .\\pipeline.py "
+    "--segment seg_XX --count 2 --megapixels 1.5"
+    "（segment 用用户提到的段名，count 默认 2，"
+    "megapixels 默认 1.5）。"
+    "如果用户要求的段已经生成过视频，"
+    "先说“该段已有 N 个视频”，"
+    "再给出重跑命令（带 --force），"
+    "同时给出查看现有结果的 review.html 完整路径，"
+    "格式为 batches/<最新批次名>/review.html，"
+    "最新批次名可以从 inspect_episode 返回的 latest_batch 字段拿到，"
+    "不要只说“去看输出目录”。"
+    "不要替用户决定哪个视频“更好看”，"
+    "审美判断交给用户。"
+    "挑片这一步必须由用户打开 review.html 亲自完成。"
+)
+
 INSTR_TOOL_LIMITS = (
     "当前工具无法检查字幕、音轨内容、"
     "画面中的角色风格、构图或每个镜头的实际数量。"
@@ -506,6 +822,7 @@ INSTRUCTIONS = "\n\n".join(
         INSTR_SAFETY,
         INSTR_CONFIG_FIELDS,
         INSTR_DIRECTORY,
+        INSTR_AGENT_WORKFLOW,
         INSTR_TOOL_LIMITS,
     ]
 )
@@ -550,6 +867,12 @@ def build_agent(api_key_override: str = ""):
             get_video_info,
             check_video_requirements,
             check_directory_requirements,
+            inspect_episode,
+            plan_next_step,
+            summarize_review,
+            start_generation,
+            check_generation,
+            list_generations,
         ],
     )
 
@@ -557,12 +880,6 @@ def build_agent(api_key_override: str = ""):
 
 
 def _format_request_error(exc: Exception, provider: dict) -> str:
-    """
-    把请求异常转换为面向用户的中文提示。
-
-    纯函数：不访问文件，不访问网络。
-    """
-
     display_name = provider.get("display_name") or "当前平台"
     base_url = provider.get("base_url") or ""
     model = provider.get("model") or ""
@@ -615,12 +932,6 @@ def _format_request_error(exc: Exception, provider: dict) -> str:
 
 
 def _extract_history_lines(history) -> list:
-    """
-    从 Gradio 的 history 中提取对话行。
-
-    纯函数：不访问网络，不依赖 Gradio 运行时。
-    """
-
     lines = []
 
     for item in (history or [])[-8:]:
