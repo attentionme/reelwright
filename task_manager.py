@@ -17,8 +17,6 @@ ALLOWED_SCRIPTS = {
     "plan_segments.py",
 }
 
-COMFYUI_URL = "http://127.0.0.1:8188/system_stats"
-
 
 def _task_path(task_id: str) -> Path:
     return TASKS_DIR / f"{task_id}.json"
@@ -56,11 +54,24 @@ def _tail_log(path: Path, n_bytes: int = 3000) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _get_comfyui_url() -> str:
+    """从 config.json 读取 comfyui_url，默认 127.0.0.1:8188。"""
+    config_path = Path(__file__).with_name("config.json")
+    try:
+        if config_path.exists():
+            data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+            url = data.get("comfyui_url", "http://127.0.0.1:8188")
+            return f"{url.rstrip('/')}/system_stats"
+    except Exception:
+        pass
+    return "http://127.0.0.1:8188/system_stats"
+
+
 def comfyui_online(timeout: float = 3.0) -> bool:
     """检查 ComfyUI 是否在线。"""
     import urllib.request
     try:
-        urllib.request.urlopen(COMFYUI_URL, timeout=timeout)
+        urllib.request.urlopen(_get_comfyui_url(), timeout=timeout)
         return True
     except Exception:
         return False
@@ -73,7 +84,7 @@ def start_task(script: str, args: list, check_comfy: bool = True) -> dict:
     if check_comfy and script in {"pipeline.py", "run_episode.py"}:
         if not comfyui_online():
             raise RuntimeError(
-                "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
+                "ComfyUI 未启动或无法连接（检查 config.json 中的 comfyui_url）。"
                 "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
             )
 
@@ -135,22 +146,6 @@ def check_task(task_id: str) -> dict:
     return task
 
 
-def list_tasks(limit: int = 10) -> list:
-    tasks = []
-    for p in sorted(
-        TASKS_DIR.glob("t*.json"),
-        key=lambda x: x.stat().st_mtime,
-        reverse=True,
-    ):
-        try:
-            tasks.append(json.loads(p.read_text(encoding="utf-8")))
-        except Exception:
-            continue
-        if len(tasks) >= limit:
-            break
-    return tasks
-
-
 def stop_task(task_id: str) -> dict:
     """停止一个 running 任务：杀进程树 + 把状态写回 failed。
 
@@ -193,3 +188,19 @@ def stop_task(task_id: str) -> dict:
         json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return {"ok": True, "task": task, "killed": killed}
+
+
+def list_tasks(limit: int = 10) -> list:
+    tasks = []
+    for p in sorted(
+        TASKS_DIR.glob("t*.json"),
+        key=lambda x: x.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            tasks.append(json.loads(p.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+        if len(tasks) >= limit:
+            break
+    return tasks

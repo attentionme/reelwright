@@ -99,6 +99,7 @@ DEFAULT_CONFIG = {
             "api_key": "",
         },
     },
+    "comfyui_url": "http://127.0.0.1:8188",
 }
 
 
@@ -346,22 +347,11 @@ set_tracing_disabled(disabled=True)
 
 @function_tool
 def inspect_episode() -> str:
-    """
-    扫描当前集的分镜、批次、标记状态，返回结构化 JSON。
-
-    当用户问“现在什么状态”“跑到哪了”“哪段还没跑”“哪段还没标记”时调用。
-    """
     return json.dumps(collect_episode_status(), ensure_ascii=False, indent=2)
 
 
 @function_tool
 def plan_next_step() -> str:
-    """
-    根据当前状态，返回下一步应该执行的命令。
-
-    当用户问“下一步做什么”“我该跑什么”“接下来怎么办”时调用。
-    本工具只返回命令建议，不执行命令。
-    """
     segments = scan_segments()
 
     if not segments:
@@ -422,11 +412,6 @@ def plan_next_step() -> str:
 
 @function_tool
 def summarize_review() -> str:
-    """
-    汇总 review_marks.json 的标记情况：哪些段标记了、哪些段没标记。
-
-    当用户问“review 标记了几段”“还有哪段没挑”“哪些已选好”时调用。
-    """
     episode = read_episode_id()
     segments = scan_segments()
     marks = read_marks()
@@ -462,21 +447,12 @@ def start_generation(
     duration: float = 13.0,
     profile: str = "workflow_profile_2.json",
 ) -> str:
-    """
-    后台启动一段视频生成（pipeline.py），立即返回 task_id，不阻塞对话。
-
-    当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时调用。
-    trial=True 时使用 5s + 1.0MP + 1 候选的快速试验模式，适合快速验证。
-    无论 force 还是 trial，每次都会创建新批次目录，不会覆盖旧批次。
-    duration 可以指定生成的具体秒数（默认 13.0）。
-    profile 可以指定使用的工作流配置文件名（默认 workflow_profile_2.json）。
-    """
     from task_manager import start_task, comfyui_online
 
     if not comfyui_online():
         return json.dumps({
-            "error": "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
-                     "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
+            "error": "ComfyUI 未启动或无法连接。"
+                     "请先打开 ComfyUI 桌面版，或检查设置中的地址是否正确。"
         }, ensure_ascii=False)
 
     args = [
@@ -504,12 +480,6 @@ def start_generation(
 
 @function_tool
 def check_generation(task_id: str) -> str:
-    """
-    查询一个后台生成任务的状态。
-
-    当用户问“跑完了吗”“那个任务怎么样了”“seg_XX 跑完了吗”时调用。
-    状态为 running / done / failed。
-    """
     from task_manager import check_task
 
     try:
@@ -525,12 +495,6 @@ def check_generation(task_id: str) -> str:
 
 @function_tool
 def list_generations() -> str:
-    """
-    列出最近的后台生成任务。
-
-    当用户问“有哪些任务在跑”“最近跑了什么”“任务列表”时调用。
-    返回最近 10 个任务，按时间倒序。
-    """
     from task_manager import list_tasks
 
     try:
@@ -923,7 +887,6 @@ async def chat(message, history, api_key):
 
 
 def _refresh_status():
-    """项目状态 Tab 的刷新函数：返回 Markdown 摘要 + 原始 JSON。"""
     data = collect_episode_status()
 
     lines = [f"### 当前集：{data['episode']}", ""]
@@ -946,8 +909,8 @@ def _refresh_status():
 
     return "\n".join(lines), data
 
+
 def _segment_choices():
-    """返回段 Dropdown 的 choices（用于 demo.load 初始化）。"""
     segs = scan_segments()
     choices = [s["id"] for s in segs]
     return gr.update(
@@ -956,8 +919,115 @@ def _segment_choices():
     )
 
 
+def _get_profile_choices():
+    root = Path(__file__).resolve().parent
+    wf_dir = root / "workflows"
+    wf_dir.mkdir(exist_ok=True)
+
+    profiles = []
+    for d in (wf_dir, root):
+        for p in d.glob("workflow_profile_*.json"):
+            if p.name not in profiles:
+                profiles.append(p.name)
+
+    default = "workflow_profile_2.json"
+    if default not in profiles:
+        profiles.append(default)
+    profiles.sort()
+    return profiles
+
+
+def _scan_profiles(current_value=None):
+    profiles = _get_profile_choices()
+    val = current_value if current_value in profiles else profiles[0]
+    return gr.update(choices=profiles, value=val)
+
+
+def _handle_refresh_wf(current_value):
+    choices = _get_profile_choices()
+    val = current_value if current_value in choices else choices[0]
+    msg = f"已刷新。当前扫描到 {len(choices)} 个工作流配置：{', '.join(choices)}"
+    if len(choices) == 1:
+        msg += "\n💡 提示：如果你的文件没出现，请确认文件名是以 `workflow_profile_` 开头的 `.json` 文件，且已放入弹出的文件夹内。"
+    return gr.update(choices=choices, value=val), msg
+
+
+def _open_workflow_folder():
+    root = Path(__file__).resolve().parent
+    wf_dir = root / "workflows"
+    wf_dir.mkdir(exist_ok=True)
+
+    import sys
+    try:
+        if sys.platform == "win32":
+            os.startfile(str(wf_dir))
+        else:
+            import webbrowser
+            webbrowser.open(wf_dir.as_uri())
+
+        files = [p.name for p in wf_dir.glob("*.json")]
+        if files:
+            return f"已打开文件夹：`{wf_dir}`\n里面现有文件：{', '.join(files)}\n请确保你的文件名为 `workflow_profile_xxx.json` 的格式，然后点击【刷新】。"
+        else:
+            return f"已打开文件夹：`{wf_dir}`\n文件夹内没有 json 文件。\n请将文件放入并命名为 `workflow_profile_xxx.json`，然后点击【刷新】。"
+    except Exception as exc:
+        return f"打开失败：{exc}"
+
+
+def _load_sys_config():
+    config = _read_config()
+    url = config.get("comfyui_url", "http://127.0.0.1:8188")
+    
+    profile_name = "workflow_profile_2.json"
+    root = Path(__file__).resolve().parent
+    for p in (root / "workflows", root):
+        f = p / profile_name
+        if f.exists():
+            try:
+                prof = json.loads(f.read_text(encoding="utf-8"))
+                out_dir = prof.get("output_dir", "")
+                break
+            except:
+                pass
+    return url, out_dir
+
+def _save_comfy_url(url):
+    config = _read_config()
+    config["comfyui_url"] = url.strip()
+    _write_config(config)
+    return f"✅ 已保存 ComfyUI 地址：{url}"
+
+def _save_output_dir(new_dir):
+    new_dir = new_dir.strip()
+    if not new_dir:
+        return "❌ 路径不能为空"
+    root = Path(__file__).resolve().parent
+    profile_name = "workflow_profile_2.json"
+    for p in (root / "workflows", root):
+        f = p / profile_name
+        if f.exists():
+            try:
+                prof = json.loads(f.read_text(encoding="utf-8"))
+                prof["output_dir"] = new_dir
+                f.write_text(json.dumps(prof, ensure_ascii=False, indent=2), encoding="utf-8")
+                return f"✅ 已修改 {profile_name} 的 output_dir：{new_dir}"
+            except Exception as e:
+                return f"❌ 保存失败：{e}"
+    return f"❌ 找不到 {profile_name}"
+
+def _open_folder(path):
+    if not path or not Path(path).exists():
+        return "❌ 目录不存在"
+    import sys
+    if sys.platform == "win32":
+        os.startfile(path)
+    else:
+        import webbrowser
+        webbrowser.open(Path(path).as_uri())
+    return "✅ 已打开目录"
+
+
 def _collect_tasks():
-    """内部：返回 (rows, choices)。对 running 任务调 check_task 刷新状态。"""
     try:
         tasks = list_tasks(limit=10)
     except Exception as exc:
@@ -986,13 +1056,11 @@ def _collect_tasks():
 
 
 def _refresh_tasks_table():
-    """Timer 用：只更新表格，不动下拉框，避免打断用户选择。"""
     rows, _ = _collect_tasks()
     return rows
 
 
 def _refresh_tasks_full():
-    """手动刷新 / 启动生成后用：表格 + 下拉框都更新。"""
     rows, choices = _collect_tasks()
     return rows, gr.update(
         choices=choices,
@@ -1001,11 +1069,9 @@ def _refresh_tasks_full():
 
 
 def _launch_generation(segment, count, megapixels, force, trial, duration, profile):
-    """从 UI 启动一次生成（pipeline.py），后台运行。"""
     if not segment:
         return "请先选择要生成的段。"
 
-    # 防重复：已有 pipeline / run_episode 在跑时阻止，避免显存竞争
     try:
         existing = list_tasks(limit=20)
     except Exception:
@@ -1027,8 +1093,8 @@ def _launch_generation(segment, count, megapixels, force, trial, duration, profi
 
     if not comfyui_online():
         return (
-            "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
-            "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
+            "ComfyUI 未启动或无法连接。"
+            "请先打开 ComfyUI 桌面版，或检查下方系统路径设置。"
         )
 
     try:
@@ -1073,7 +1139,6 @@ def _launch_generation(segment, count, megapixels, force, trial, duration, profi
 
 
 def _show_task_log(task_id):
-    """读取指定任务的日志尾部（5000 字节）。"""
     if not task_id:
         return "请先选择任务。"
 
@@ -1123,8 +1188,8 @@ def _show_task_log(task_id):
     )
     return header + content
 
+
 def _stop_task_from_ui(task_id):
-    """UI 停止按钮：调用 task_manager.stop_task。"""
     if not task_id:
         return "请先选择任务。"
 
@@ -1142,12 +1207,6 @@ def _stop_task_from_ui(task_id):
 
 
 def _open_review_page(segment):
-    """打开指定段最新批次的 review.html。
-
-    pywebview 启动时会 patch 标准库 webbrowser，让 open() 在应用内部开新窗口；
-    而它要求主线程调用，Gradio 回调在工作线程，会导致静默失败。
-    所以 Windows 下改用 os.startfile 直接交给系统默认程序。
-    """
     if not segment:
         return "请先选择段。"
 
@@ -1175,6 +1234,7 @@ def _open_review_page(segment):
         )
 
     return f"已在系统浏览器打开：`batches/{latest}/review.html`"
+
 
 _startup_config = _read_config()
 _active_provider_config = _resolve_provider_config(
@@ -1308,12 +1368,15 @@ with gr.Blocks(
                     scale=1,
                 )
                 gen_profile = gr.Dropdown(
-                    choices=["workflow_profile_2.json"],
-                    value="workflow_profile_2.json",
+                    choices=[],
+                    value=None,
                     label="工作流(profile)",
-                    scale=2,
-                    allow_custom_value=True,
+                    scale=3,
                 )
+                open_wf_btn = gr.Button("打开工作流文件夹", scale=1)
+                refresh_wf_btn = gr.Button("刷新", scale=0)
+
+            wf_msg = gr.Markdown("")
 
             with gr.Row():
                 gen_force = gr.Checkbox(value=True, label="force（忽略缓存）")
@@ -1322,15 +1385,51 @@ with gr.Blocks(
 
             gen_msg = gr.Markdown("")
 
+            gr.Markdown("---")
+            gr.Markdown("### 系统路径设置")
+            gr.Markdown("如果 ComfyUI 不在默认端口或默认安装目录，请在此修改。修改后请重启软件生效。")
+            
+            with gr.Row():
+                input_comfy_url = gr.Textbox(label="ComfyUI API 地址", value="http://127.0.0.1:8188", scale=2)
+                save_url_btn = gr.Button("保存地址", scale=1)
+            
+            with gr.Row():
+                input_output_dir = gr.Textbox(label="当前工作流 Output 路径 (读取自 profile)", interactive=True, scale=3)
+                save_dir_btn = gr.Button("修改 Output 路径", scale=1)
+                open_dir_btn = gr.Button("打开此目录", scale=1)
+            
+            config_msg = gr.Markdown("")
+
             demo.load(fn=_segment_choices, outputs=[gen_segment])
+            demo.load(
+                fn=_handle_refresh_wf,
+                inputs=[gen_profile],
+                outputs=[gen_profile, wf_msg],
+            )
             demo.load(
                 fn=_refresh_tasks_full,
                 outputs=[task_table, task_id_dropdown],
             )
+            demo.load(fn=_load_sys_config, outputs=[input_comfy_url, input_output_dir])
+
+            save_url_btn.click(fn=_save_comfy_url, inputs=[input_comfy_url], outputs=[config_msg])
+            save_dir_btn.click(fn=_save_output_dir, inputs=[input_output_dir], outputs=[config_msg])
+            open_dir_btn.click(fn=_open_folder, inputs=[input_output_dir], outputs=[config_msg])
 
             refresh_tasks_btn.click(
                 fn=_refresh_tasks_full,
                 outputs=[task_table, task_id_dropdown],
+            )
+
+            open_wf_btn.click(
+                fn=_open_workflow_folder,
+                outputs=[wf_msg],
+            )
+
+            refresh_wf_btn.click(
+                fn=_handle_refresh_wf,
+                inputs=[gen_profile],
+                outputs=[gen_profile, wf_msg],
             )
 
             view_log_btn.click(
@@ -1388,8 +1487,6 @@ with gr.Blocks(
                 outputs=[review_msg],
             )
 
-    # Timer 放在 Tabs 外面，不管当前在哪个 Tab 都持续 tick，
-    # 保证切回「后台任务」时 task_table 是最新的。
     task_timer = gr.Timer(value=5, active=True)
     task_timer.tick(
         fn=_refresh_tasks_table,

@@ -9,7 +9,15 @@ import requests
 class WorkflowAdapter:
     """把 workflow_profile.json 的语义角色映射到具体节点参数。"""
 
-    def __init__(self, profile_path: str, comfy_url: str = "http://127.0.0.1:8188"):
+    def __init__(self, profile_path: str, comfy_url: str = ""):
+        if not comfy_url:
+            config_path = Path(__file__).with_name("config.json")
+            try:
+                data = json.loads(config_path.read_text(encoding="utf-8-sig"))
+                comfy_url = data.get("comfyui_url", "http://127.0.0.1:8188")
+            except Exception:
+                comfy_url = "http://127.0.0.1:8188"
+                
         self.comfy_url = comfy_url.rstrip("/")
         self.profile = json.loads(
             Path(profile_path).read_text(encoding="utf-8-sig")
