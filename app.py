@@ -565,12 +565,14 @@ def start_generation(
     count: int = 2,
     megapixels: float = 1.5,
     force: bool = True,
+    trial: bool = False,
 ) -> str:
     """
     后台启动一段视频生成（pipeline.py），立即返回 task_id，不阻塞对话。
 
     当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时调用。
-    本工具会在后台运行 pipeline.py，不会阻塞对话。启动后立即返回 task_id。
+    trial=True 时使用 5s + 1.0MP + 1 候选的快速试验模式，适合快速验证。
+    无论 force 还是 trial，每次都会创建新批次目录，不会覆盖旧批次。
     """
     from task_manager import start_task, comfyui_online
 
@@ -587,6 +589,8 @@ def start_generation(
     ]
     if force:
         args.append("--force")
+    if trial:
+        args.append("--trial")
 
     try:
         task = start_task("pipeline.py", args, check_comfy=False)
@@ -781,9 +785,17 @@ INSTR_AGENT_WORKFLOW = (
     "不要凭记忆或猜测回答。"
     "当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时，"
     "调用 start_generation 工具，参数 segment=seg_XX，"
-    "count 默认 2，megapixels 默认 1.5，force 默认 True。"
+    "count 默认 2，megapixels 默认 1.5，force 默认 True，trial 默认 False。"
+    "如果用户明确说“用 trial 模式”“快速试验”“5 秒试一下”，"
+    "或者只是快速验证而不需要成品，"
+    "把 trial 设为 True。"
+    "trial=True 时，pipeline.py 会自动覆盖 duration=5.0、"
+    "megapixels=1.0、count=1。"
+    "不要因为工具不支持 trial 就拒绝启动，"
+    "trial 是 start_generation 的合法参数，直接传即可。"
     "启动后立即告诉用户 task_id，"
-    "并说明“后台运行中，预计 20–30 分钟，稍后可以问我跑完了吗”。"
+    "并说明“后台运行中，预计 20–30 分钟（trial 约 3–5 分钟），"
+    "稍后可以问我跑完了吗”。"
     "不要阻塞等待完成，不要假装已经看到结果。"
     "当用户问“跑完了吗”“那个任务怎么样了”“seg_XX 跑完了吗”时，"
     "调用 check_generation，传用户提到的 task_id；"
@@ -794,12 +806,8 @@ INSTR_AGENT_WORKFLOW = (
     "并贴出 log_tail 尾部的错误信息，"
     "建议用户检查 ComfyUI 是否在线、显存是否足够。"
     "当用户问“有哪些任务在跑”“最近跑了什么”时，调用 list_generations。"
-    "如果用户要求“帮我跑一段”但你没有 start_generation 工具，"
-    "必须给出完整、可直接复制粘贴的命令，"
-    "格式为：.venv\\Scripts\\python.exe .\\pipeline.py "
-    "--segment seg_XX --count 2 --megapixels 1.5"
-    "（segment 用用户提到的段名，count 默认 2，"
-    "megapixels 默认 1.5）。"
+    "如果 start_generation 返回错误（比如 ComfyUI 未启动），"
+    "把错误原样告诉用户，不要假装已启动。"
     "如果用户要求的段已经生成过视频，"
     "先说“该段已有 N 个视频”，"
     "再给出重跑命令（带 --force），"
