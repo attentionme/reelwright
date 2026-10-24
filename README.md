@@ -1,308 +1,240 @@
-# 动画制作助手
+# Reelwright · 影匠
 
-一个用于动画制作流程辅助的个人项目。
+> by [Taoran_Jiang](https://jiangtaoran.xin/) · [GitHub](https://github.com/attentionme)
 
-- 前半部分：确定性的视频规范检查 Agent
-- 后半部分：ComfyUI 批量生成、技术质量门控、审片页面
+一个本地 AI Agent，把一份剧本变成一段动态分镜（animatic）。
 
-当前版本：v0.21.0
+```
+剧本 script.txt
+   ↓ LLM 分镜规划
+segments/seg_01 ~ seg_03（每段 10–13s、2–3 个镜头）
+   ↓ 尾帧接力 + ComfyUI 批量生成
+batches/（每段 2 个候选 + 技术质检 + 审片页面）
+   ↓ 人工挑片 + 自动拼接
+episode_final.mp4
+```
 
----
+Reelwright（影匠）不是一个通用产品，而是一个**可运行的参考实现**：演示如何用 Agent 编排 ComfyUI 做视频生成，并把"分镜规划 → 批量抽卡 → 质量门控 → 人工审片 → 成片拼接"串成一条可复现的流水线。
 
-## 项目由两部分组成
+## 为什么做这个
 
-### 第一部分：视频规范检查 Agent
+市面上的 AI 视频工具大多是"一次性生成"，很难控制：
 
-用户用自然语言提出请求，Agent 理解意图后调用工具，工具用确定性逻辑（ffprobe / ffmpeg / 规则判断）返回结构化结果，Agent 再用自然语言解释给用户。
+- 一段 10 秒的片子，想要 3 个镜头切换，模型经常理解不了"机位变化"；
+- 多段生成，人物脸和场景对不上；
+- 抽卡 20 个，人工挑片要逐个打开；
+- 挑完还要手动拼接。
 
-已支持的检查项：
+Reelwright 尝试解决的是**"从剧本到成片"的工程化流程**，而不是"单次生成质量"。核心思路：
 
-- 画幅比例（含容差）
-- 单镜头 / 整集时长（含整集容差）
-- 帧率
-- 视频编码 / 音频编码
-- 文件命名规则
-- 独立字幕轨道
-- 音频活动比例（只描述活动/静音分布，不判断内容类型）
-- 目录级聚合（文件数量、总时长、画幅/帧率/编码一致性）
+- **LLM 负责规划**：把剧本拆成段，把每段写成 H3 能理解的六段式 prompt，用自然语言描述"画面里有什么"而不是"用什么机位"；
+- **Python 负责执行**：调用 ComfyUI API、抽尾帧、技术检测、拼接；
+- **人负责审美**：挑哪个视频、节奏好不好，这部分不交给 AI。
 
-### 第二部分：ComfyUI 批量生成
+## 核心能力
 
-用脚本驱动 ComfyUI 的 API，批量生成视频，每次记录 seed 和参数，生成审片页面，并对输出做确定性的技术质量检测。
+### 1. 剧本 → 多视图分镜
 
-当前支持：
+`plan_segments.py` 把剧本拆成 2–5 段，每段 8–14 秒，包含 2–3 个"视图"（镜头切换）。视图切换用自然语言描述：
 
-- 通过 `workflow_profile.json` 把语义角色（prompt、seed、时长、分辨率、输出节点）映射到具体工作流节点
-- 批量循环，断点续跑，`--force` 强制重跑
-- 每个批次生成独立目录 `batches/YYYYMMDD_HHMMSS/`
-- 自动生成 `review.html`，浏览器打开即可一次看完一批
-- 技术质量检测：时长异常、无音频流、文件过小、帧率偏离
+```
+The video starts with a wide view of a small apartment living room at night...
+Then the view changes to a close look at 小满's hand pressing a folded cloth...
+Then the view changes back to the wide view of the living room...
+```
 
-核心原则（两部分共用）：
+不使用 `[Shot 1]`、`close-up`、`over-the-shoulder` 这类摄影术语——H3 不理解，会把 "over-the-shoulder" 理解成"画面里要有个人挡着"，凭空多出人物。**这是踩过的坑，不是猜测。**
 
-- LLM 只负责理解意图和解释结果，不重新计算确定性数据
-- Python 负责确定性业务逻辑
-- FFmpeg / ffprobe 负责底层媒体事实
-- warning / info 不会被说成 confirmed failure
+### 2. 尾帧接力
 
----
+每段生成完，`pipeline.py` 自动抽最后一帧，作为下一段的 `<Picture 3>` 参考图。3 段连起来，角色、场景、灯光保持一致。
+
+```
+seg_01 尾帧 → seg_02 参考图 → seg_02 尾帧 → seg_03 参考图 → ...
+```
+
+### 3. 批量生成 + 质量门控
+
+`batch_run.py` 对每段跑 2 个候选，自动做：
+
+- **技术检测**：时长异常、无音频流、文件过小、帧率偏离；
+- **音频检测**：SEAD 模型判断是否有 BGM；
+- **可疑排序**：可疑的视频排在审片页面最前面。
+
+### 4. 审片页面
+
+每次生成完自动生成 `review.html`：
+
+- 每个视频一个播放器，下方显示 seed、耗时、文件大小、时长、帧率；
+- 右上角"通过"/"可疑"标记，可疑的排在前面；
+- 点"喜欢"/"淘汰"，标记存在浏览器 localStorage，**按集累积**，换集清零；
+- 点"导出本集全部标记"，下载 `review_marks.json`。
+
+### 5. 自动拼接
+
+`concat_episode.py` 按 `seg_01 → seg_02 → seg_03` 的顺序 ffmpeg concat，输出 `episode_final.mp4`。
+
+### 6. Agent 接管
+
+Gradio 界面里的 Agent 有 10 个工具：
+
+**只读**：
+- `inspect_episode`：扫描当前集状态（哪段已生成、哪段已标记）
+- `plan_next_step`：根据状态建议下一步命令
+- `summarize_review`：汇总标记情况
+
+**执行**：
+- `start_generation(segment, trial=False)`：后台启动生成，不阻塞对话
+- `check_generation(task_id)`：查任务状态
+- `list_generations`：列最近任务
+
+Agent 的边界很清楚：**能启动、能查状态、能给命令，不能判断画面好不好看、不能自动挑片、不能改脚本代码。**
+
+## 技术栈
+
+- **LLM 编排**：`openai-agents` 0.23.1，支持 DeepSeek / 豆包 / 通义千问 / Kimi / 智谱 / OpenAI / Claude 七个平台
+- **UI**：Gradio 6.30
+- **视频生成**：ComfyUI + MiniMax H3（Ref2VA 模式）
+- **媒体处理**：FFmpeg 9.0
+- **音频检测**：SEAD（YamNet）
+- **Python 3.14**
 
 ## 快速开始
 
-### 环境要求
+### 前置条件
 
 - Windows + PowerShell
-- Python 3.14（项目在 3.14.8 上开发）
-- FFmpeg / ffprobe 已安装并加入 PATH
-- ComfyUI 桌面版（仅批量生成部分需要）
+- Python 3.14
+- FFmpeg 已加入 PATH
+- ComfyUI 桌面版已安装，能通过 `http://127.0.0.1:8188` 访问
+- 一张 16GB 显存的 GPU（项目在 RTX 5070 Ti 上验证）
 
 ### 安装
 
 ```powershell
-Set-Location "D:\AIProjects\agent-learnin"
+git clone https://github.com/attentionme/reelwright.git
+cd reelwright
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 第一部分：启动检查 Agent
+### 配置
+
+1. 把 ComfyUI 导出的 API 格式工作流保存为 `workflow_api_2.json`；
+2. 写 `workflow_profile_2.json`，把语义角色（prompt、seed、时长）映射到节点 id；
+3. 启动 `app.py`，在 UI 里填 API Key、保存。
+
+### 跑一集
 
 ```powershell
-Set-Location "D:\AIProjects\agent-learnin"
+# 1. 写剧本 script.txt
+
+# 2. LLM 分镜
+.\.venv\Scripts\python.exe .\plan_segments.py `
+  --script script.txt `
+  --ref-characters 小满1_2048.png,桃子1_2048.png `
+  --force
+
+# 3. 逐段生成（首次建议用 trial 模式验证）
+.\.venv\Scripts\python.exe .\run_episode.py --trial
+
+# 4. 打开 batches/seg01_*/review.html，标记喜欢，导出 review_marks.json
+
+# 5. 正式跑
+.\.venv\Scripts\python.exe .\run_episode.py --count 2
+
+# 6. 拼接
+.\.venv\Scripts\python.exe .\concat_episode.py
+```
+
+或者启动 Agent，直接对话：
+
+```powershell
 .\.venv\Scripts\python.exe .\app.py
 ```
 
-浏览器打开 `http://127.0.0.1:7860`，在“模型设置”里选平台、填 API Key、点保存。
+> "帮我跑 seg_01，用 trial 模式"
+> "跑完了吗"
+> "现在什么状态"
 
-### 第二部分：批量生成
+## 工程实践
 
-先确保 ComfyUI 桌面版已启动，Web 界面能打开（默认 `http://127.0.0.1:8188`）。
-
-```powershell
-Set-Location "D:\AIProjects\agent-learnin"
-
-# 跑 5 个随机 seed
-.\.venv\Scripts\python.exe .\batch_run.py --profile workflow_profile_2.json --count 5 --megapixels 1.5 --duration 6.0
-
-# 指定 seed
-.\.venv\Scripts\python.exe .\batch_run.py --profile workflow_profile_2.json --seeds 123,456 --megapixels 1.5 --duration 6.0
-
-# 强制重跑已完成的 seed
-.\.venv\Scripts\python.exe .\batch_run.py --profile workflow_profile_2.json --seeds 123 --megapixels 1.5 --duration 6.0 --force
-```
-
-跑完后终端会打印审片页面路径，用浏览器打开那个 `review.html`。
-
----
-
-## ComfyUI 批量生成的配置
-
-### 三个配置文件
-
-| 文件 | 作用 | 是否提交到 Git |
-|---|---|---|
-| `workflow_api_*.json` | ComfyUI 导出的 API 格式工作流 | 提交（可复现的输入） |
-| `workflow_profile_*.json` | 语义角色 → 节点 id + 参数名 的映射 | 提交 |
-| `subject_definitions.txt` | 本次生成用的 prompt | 提交 |
-
-`workflow_api_*.json` 必须从 ComfyUI 界面 **工作流 → 导出（API）** 得到，不能手动改 UI 格式的 JSON。
-
-### profile 的结构
-
-```json
-{
-  "name": "h3_ref2v_selflift",
-  "workflow_file": "workflow_api_2.json",
-  "output_node": {"id": "364", "title": "Video Combine 🎥🅥🅗🅢"},
-  "output_dir": "D:/Comfy-Desktop/ComfyUI-Shared/output",
-  "roles": {
-    "prompt":          {"node": "263", "param": "text"},
-    "seed":            {"node": "397", "param": "seed"},
-    "duration":        {"node": "259", "param": "value"},
-    "aspect_ratio":    {"node": "252", "param": "aspect_ratio"},
-    "megapixels":      {"node": "252", "param": "megapixels"},
-    "filename_prefix": {"node": "364", "param": "filename_prefix"}
-  }
-}
-```
-
-`roles` 里只写本次批量实际要控制的参数。`batch_run.py` 当前会设 `prompt`、`seed`、`duration`、`aspect_ratio`、`megapixels` 五个角色，profile 里缺任何一个都会报 `KeyError`。
-
-### 换工作流的流程
-
-1. 在 ComfyUI 里加载新工作流，确认无红框；
-2. 导出 API JSON，放到项目目录；
-3. 用这条命令列出所有节点的 id / class_type / title：
-
-```powershell
-$wf = Get-Content .\workflow_api_new.json -Raw -Encoding UTF8 | ConvertFrom-Json
-$wf.PSObject.Properties | ForEach-Object {
-    "{0}  {1}  {2}" -f $_.Name, $_.Value.class_type, $_.Value._meta.title
-}
-```
-
-4. 新建 `workflow_profile_new.json`，把角色映射到新节点 id；
-5. `batch_run.py --profile workflow_profile_new.json ...` 跑。
-
-**Python 代码不用改。** 这就是 profile 机制的目的。
-
-### 常见坑
-
-- **API 格式丢了 UI 布局和注释**：这是 ComfyUI 的设计，API 格式是给程序用的，不是给人编辑的。要看、要改，加载原来的 UI 工作流。
-- **节点 id 会变**：重新加载工作流后 id 可能重新编号，每次换工作流都要重新核对 profile。
-- **`megapixels` 会被脚本默认值覆盖**：`batch_run.py` 默认 `megapixels=1.0`，如果工作流 UI 里设的是 1.5，脚本会把分辨率降下来。**每次跑都要显式传 `--megapixels`**。
-- **prompt 文件为空会清空工作流的 prompt**：`batch_run.py` 有非空检查，读到空文件会直接退出。
-- **VHS_VideoCombine 先写 png 再写 mp4**：`find_output` 会等到 mp4 出现才返回，不会拿到预览图。
-- **ComfyUI 有内部缓存**：同 seed 重跑可能几秒就返回上次的结果。改 prompt 时要注意这一点。
-
----
-
-## 批次目录和审片页面
-
-每次 `batch_run.py` 创建一个批次目录：
-
-```text
-batches/
-└── 20261021_160759/
-    ├── seed_3578509293379117.mp4
-    ├── seed_1919492562697271.mp4
-    ├── seed_5753404422420423.mp4
-    └── review.html
-```
-
-`review.html` 的特点：
-
-- 每个视频一个播放器，下方显示 seed、耗时、文件大小、时长、帧率；
-- 右上角有“通过”或“可疑”标记；
-- 可疑的视频排在前面，下方列出原因；
-- 顶部显示成功数量和可疑数量。
-
-`batches/` 和 `batch_log.csv` 已被 `.gitignore` 忽略，不进 Git。
-
----
-
-## 技术质量检测的边界
-
-`quality_check.py` 能抓：
-
-- 时长异常（实际时长与预期差 > 1 秒）
-- 没有音频流
-- 文件过小（< 0.5MB）
-- 帧率异常（偏离 24fps 超过 0.5）
-
-**它抓不住**：
-
-- 画面局部崩坏、色块、肢体扭曲
-- 人物形象与参考图不符
-- 动作不符合 prompt 描述
-- 画风漂移（2D 手绘变成 3D 写实）
-
-这些需要视觉模型（AIGCQA、VideoArgus、多模态 LLM），当前版本没有接入。**技术检测通过不代表画面没问题**，人工审片仍然必要。
-
----
-
-## 其他配置
-
-### config.json（检查 Agent 用）
-
-`config.json` 保存各平台的 API Key 和当前选中的平台，已被 `.gitignore` 忽略。
-
-**注意**：
-
-- 不要提交到 Git；
-- 不要在用户之间共享；
-- 推荐通过 UI 修改，不要用 PowerShell 的 `Set-Content` / `ConvertTo-Json` 直接改（会导致编码损坏）。
-
-支持的平台：DeepSeek、豆包、通义千问、Kimi、智谱 GLM、OpenAI、Claude。模型名以各平台官方文档为准。
-
-### project.json（检查 Agent 用）
-
-`project.json` 是**项目规范**，会被提交到 Git。字段包括画幅、时长、帧率、编码、命名规则、音频/字幕要求。修改规则不需要改代码。
-
----
-
-## 项目结构
-
-```text
-agent-learnin/
-├── .env                     # 可选，DEEPSEEK_API_KEY（已被 .gitignore 忽略）
-├── .gitignore
-├── config.json              # 本机运行时配置（已被 .gitignore 忽略）
-├── batch_log.csv            # 批量生成日志（已被 .gitignore 忽略）
-├── batches/                 # 批次输出（已被 .gitignore 忽略）
-├── start.bat                # Windows 启动器
-├── app.py                   # Gradio 界面 + Agent 定义 + 多平台配置
-├── batch_run.py             # 批量生成主脚本
-├── comfy_adapter.py         # 工作流适配层（profile → 节点参数）
-├── quality_check.py         # 技术质量检测
-├── workflow_api.json        # 旧工作流（v0.18 起的第一个 profile）
-├── workflow_api_2.json      # 新工作流（SelfLift H3）
-├── workflow_profile.json    # 旧工作流的角色映射
-├── workflow_profile_2.json  # 新工作流的角色映射
-├── subject_definitions.txt  # 本次生成的 prompt
-├── probe_run.py             # 单次生成调试脚本
-├── main.py                  # 早期学习入口（历史文件）
-├── project.json             # 项目规范配置
-├── requirements.txt
-├── tools.py                 # 核心业务逻辑 + Agent Tool
-├── tools_v01_backup.py      # v0.1 备份（历史文件，不删）
-├── tests/                   # 单元测试 + 集成测试
-└── .venv/
-```
-
----
-
-## 运行测试
-
-```powershell
-Set-Location "D:\AIProjects\agent-learnin"
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
-
-当前共 196 个测试，覆盖检查 Agent 的纯函数和集成逻辑。批量生成部分（`batch_run.py`、`comfy_adapter.py`、`quality_check.py`）目前没有单元测试，依赖手动验证。
-
----
+- **纯函数分离**：所有"决定结论"的逻辑抽成纯函数（`_build_duration_check`、`_resolve_provider_config`、`_provider_options`），196 个单元测试覆盖；
+- **结构化输出**：`issue_report` 分 `error / warning / info / pass / at_target / not_applicable / unclassified` 七类，Agent 不能把 warning 说成 failure；
+- **多平台配置**：`config.json` 支持 7 个 OpenAI 兼容平台，UI 下拉切换；
+- **后台任务管理**：`task_manager.py` 用 `subprocess.Popen` + `tasks/*.json` 状态文件，Agent 启动 20 分钟的任务不阻塞对话；
+- **启动前检查**：`start_generation` 先检查 ComfyUI 在线，不在线直接返回错误，不启动注定失败的任务。
 
 ## 已知限制
 
-- 视觉质量没有自动检测。技术检测通过不代表画面没问题。
-- 生成质量存在种子方差。同一个工作流、同一套参数，不同 seed 的输出质量差异可能很大。批量跑 + 人工挑是当前的工作方式。
-- 有 `<Picture 5>` 这类 prompt 引用但工作流没有对应输入节点时，模型会忽略该引用，导致“从上一段视频的最后一帧开始”这类约束失效。
-- ComfyUI 的内部缓存可能导致同 seed 重跑几秒返回旧结果。
+- **视觉质量没有自动检测**。技术检测能抓时长、音频、帧率，但抓不住"画面崩坏、角色不像、有字幕"。这些需要人工审片。
+- **生成质量有种子方差**。同一个 seed 和 prompt，不同次生成的质量可能差异很大。批量跑 2 个候选 + 人工挑是当前的工作方式。
+- **多视图不是真正的电影分镜**。H3 能理解"画面内容变化"，但不能理解"机位切换、轴线、视线匹配"。所以多视图是保守的"全景 → 局部 → 全景"，不是真正的电影剪辑。
+- **13s + 1.5MP 是 16GB 显存的负载边缘**。偶尔会超时，`comfy_adapter.py` 会主动中断卡住的任务。
 
----
+## 项目结构
+
+```
+reelwright/
+├── app.py                   # Gradio UI + Agent 定义 + 10 个工具
+├── task_manager.py          # 后台任务管理
+├── plan_segments.py         # LLM 分镜规划
+├── pipeline.py              # 尾帧接力
+├── batch_run.py             # 批量生成主脚本
+├── comfy_adapter.py         # 工作流适配层
+├── quality_check.py         # 技术检测 + SEAD
+├── concat_episode.py        # 拼接成片
+├── run_episode.py           # 一键跑全流程
+├── tools.py                 # 早期视频规范检查工具
+├── workflow_api_2.json      # H3 工作流（API 格式）
+├── workflow_profile_2.json  # 语义角色映射
+├── segments/                # 分镜 prompt
+├── tests/                   # 196 个单元测试
+└── ...
+```
 
 ## 版本历史
 
-| 版本 | 内容 |
-|---|---|
-| v0.21.0 | 技术质量检测（时长、音频流、文件大小、帧率） |
-| v0.20.0 | 批次目录、审片页面、`--force` 重跑、mp4 优先检测 |
-| v0.19.0 | SelfLift H3 工作流 profile、prompt 非空检查 |
-| v0.18.0 | ComfyUI 适配层（profile 机制）、单次探测脚本 |
-| v0.17.x | README 更新，补 requirements.txt |
-| v0.16.0 | UI 加多平台下拉框，切换平台写入 config.json |
-| v0.15.0 | build_agent 从 config.json 读取 active_provider |
-| v0.14.0 | config.json 管理 API Key，UI 增加“保存设置” |
-| v0.13.x | 从 .env 加载 API Key，Gradio Soft 主题，Windows 启动器 |
-| v0.12.0 | 画幅容差 |
-| v0.11.0 | 文件命名检查 |
-| v0.10.x | 集成测试 |
-| v0.9.x | 工程整理 |
-| v0.8.x | 目录级检查 |
-| v0.7.x | 视频/音频编码检查 |
-| v0.6.x | 时长容差 + 报告文案同步 |
-| v0.5.0 | target_fps 支持 |
-| v0.4.x | 抽纯函数，建立回归测试 |
+从 v0.4 到 v0.40，完整 tag 历史。关键节点：
 
----
+- **v0.4–v0.12**：视频规范检查 Agent（画幅、时长、编码、命名）
+- **v0.18**：ComfyUI 适配层（profile 机制）
+- **v0.19**：SelfLift H3 工作流
+- **v0.29**：SEAD 音频检测
+- **v0.36**：多视图 prompt + 13s 分段
+- **v0.37**：命名优化 + mtime 排序
+- **v0.38**：Agent 只读状态工具
+- **v0.39**：Agent 后台执行工具
+- **v0.40**：任务目录忽略 + 适配层最终化
 
-## 开发原则
+## Author
 
-- 每一个重要功能完成后：先运行、测试、检查 diff、`git diff --check`、`git add`、`git diff --cached`、commit
-- 不直接 `git add .`，尤其不要把未跟踪的临时文件加入 Git
-- 不删除 `tools_v01_backup.py`，不删除历史 tag，不修改历史 commit，不使用 `git clean -fd`
-- 不让 LLM 重新计算确定性检测数据
-- 不把 warning 说成 confirmed failure，不把 info 说成 failure
-- 不把“没有 subtitle stream”说成“画面绝对没有字幕”
-- 不把 audio stream 说成 BGM
-- 不在没有实际检查的情况下声称全部通过
+**Taoran_Jiang**
+
+- Portfolio: [jiangtaoran.xin](https://jiangtaoran.xin/)
+- GitHub: [@attentionme](https://github.com/attentionme)
+- Email: [zmyjtr0418@gmail.com](mailto:zmyjtr0418@gmail.com)
+
+## License
+
+MIT License
+
+Copyright (c) 2026 Taoran_Jiang
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
