@@ -459,6 +459,8 @@ def start_generation(
     megapixels: float = 1.5,
     force: bool = True,
     trial: bool = False,
+    duration: float = 13.0,
+    profile: str = "workflow_profile_2.json",
 ) -> str:
     """
     后台启动一段视频生成（pipeline.py），立即返回 task_id，不阻塞对话。
@@ -466,6 +468,8 @@ def start_generation(
     当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时调用。
     trial=True 时使用 5s + 1.0MP + 1 候选的快速试验模式，适合快速验证。
     无论 force 还是 trial，每次都会创建新批次目录，不会覆盖旧批次。
+    duration 可以指定生成的具体秒数（默认 13.0）。
+    profile 可以指定使用的工作流配置文件名（默认 workflow_profile_2.json）。
     """
     from task_manager import start_task, comfyui_online
 
@@ -479,6 +483,8 @@ def start_generation(
         "--segment", segment,
         "--count", str(count),
         "--megapixels", str(megapixels),
+        "--duration", str(duration),
+        "--profile", profile,
     ]
     if force:
         args.append("--force")
@@ -678,7 +684,11 @@ INSTR_AGENT_WORKFLOW = (
     "不要凭记忆或猜测回答。"
     "当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时，"
     "调用 start_generation 工具，参数 segment=seg_XX，"
-    "count 默认 2，megapixels 默认 1.5，force 默认 True，trial 默认 False。"
+    "count 默认 2，megapixels 默认 1.5，force 默认 True，trial 默认 False，"
+    "duration 默认 13.0，profile 默认 workflow_profile_2.json。"
+    "如果用户明确要求“跑 10 秒的”“时长设为 8s”，"
+    "请修改 duration 参数。"
+    "如果用户说“换个工作流跑”，请确认他想用哪个 profile 文件（如 workflow_profile_2.json）。"
     "如果用户明确说“用 trial 模式”“快速试验”“5 秒试一下”，"
     "或者只是快速验证而不需要成品，"
     "把 trial 设为 True。"
@@ -990,7 +1000,7 @@ def _refresh_tasks_full():
     )
 
 
-def _launch_generation(segment, count, megapixels, force, trial):
+def _launch_generation(segment, count, megapixels, force, trial, duration, profile):
     """从 UI 启动一次生成（pipeline.py），后台运行。"""
     if not segment:
         return "请先选择要生成的段。"
@@ -1031,10 +1041,19 @@ def _launch_generation(segment, count, megapixels, force, trial):
     except (TypeError, ValueError):
         megapixels = 1.5
 
+    try:
+        duration = float(duration) if duration else 13.0
+    except (TypeError, ValueError):
+        duration = 13.0
+
+    profile = profile or "workflow_profile_2.json"
+
     args = [
         "--segment", str(segment),
         "--count", str(count),
         "--megapixels", str(megapixels),
+        "--duration", str(duration),
+        "--profile", profile,
     ]
     if force:
         args.append("--force")
@@ -1046,7 +1065,7 @@ def _launch_generation(segment, count, megapixels, force, trial):
     except Exception as exc:
         return f"启动失败：{type(exc).__name__}: {exc}"
 
-    trial_note = "trial 模式（5s / 1.0MP / 1 候选）" if trial else f"count={count}"
+    trial_note = "trial 模式（5s / 1.0MP / 1 候选）" if trial else f"count={count}, duration={duration}s, profile={profile}"
     return (
         f"已启动任务 `{task['task_id']}`：{segment}，{trial_note}。\n\n"
         "后台运行中。表格每 5 秒自动刷新，或点「刷新任务」立即更新。"
@@ -1280,6 +1299,23 @@ with gr.Blocks(
                 )
 
             with gr.Row():
+                gen_duration = gr.Number(
+                    value=13.0,
+                    label="时长(s)",
+                    precision=1,
+                    minimum=1.0,
+                    maximum=60.0,
+                    scale=1,
+                )
+                gen_profile = gr.Dropdown(
+                    choices=["workflow_profile_2.json"],
+                    value="workflow_profile_2.json",
+                    label="工作流(profile)",
+                    scale=2,
+                    allow_custom_value=True,
+                )
+
+            with gr.Row():
                 gen_force = gr.Checkbox(value=True, label="force（忽略缓存）")
                 gen_trial = gr.Checkbox(value=False, label="trial（5s 快速试验）")
                 gen_btn = gr.Button("启动生成", variant="primary", scale=1)
@@ -1316,7 +1352,7 @@ with gr.Blocks(
                 fn=_launch_generation,
                 inputs=[
                     gen_segment, gen_count, gen_megapixels,
-                    gen_force, gen_trial,
+                    gen_force, gen_trial, gen_duration, gen_profile,
                 ],
                 outputs=[gen_msg],
             ).then(
