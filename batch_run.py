@@ -2,6 +2,7 @@ import argparse
 import csv
 import html
 import random
+import re
 import shutil
 import subprocess
 import time
@@ -19,6 +20,15 @@ def load_episode_id() -> str:
         if text:
             return text
     return "ep01"
+
+
+def short_batch_name(segment: str) -> str:
+    """seg_01 + 月日-时分 → seg01_1023-1302"""
+    stamp = datetime.now().strftime("%m%d-%H%M")
+    if segment:
+        compact = segment.replace("_", "")
+        return f"{compact}_{stamp}"
+    return stamp
 
 
 REVIEW_SCRIPT = """
@@ -42,7 +52,7 @@ REVIEW_SCRIPT = """
   function refreshButtons() {
     var marks = loadMarks();
     document.querySelectorAll('.mark-btn').forEach(function(btn) {
-      var key = btn.dataset.batch + '/' + btn.dataset.seed;
+      var key = btn.dataset.batch + '/' + btn.dataset.video;
       var type = btn.dataset.type;
       if (marks[key] === type) {
         btn.classList.add('active');
@@ -62,7 +72,7 @@ REVIEW_SCRIPT = """
   document.addEventListener('click', function(e) {
     var btn = e.target.closest('.mark-btn');
     if (!btn) return;
-    var key = btn.dataset.batch + '/' + btn.dataset.seed;
+    var key = btn.dataset.batch + '/' + btn.dataset.video;
     var type = btn.dataset.type;
     var marks = loadMarks();
     if (marks[key] === type) {
@@ -133,10 +143,8 @@ def parse_args():
     parser.add_argument("--aspect-ratio", default="16:9 (Widescreen)")
     parser.add_argument("--megapixels", type=float, default=1.0)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--retry-delay", type=int, default=30,
-                        help="失败后等多少秒再跑下一个 seed，默认 30")
-    parser.add_argument("--trial", action="store_true",
-                        help="试验模式：duration=5, megapixels=1.0, count=1")
+    parser.add_argument("--retry-delay", type=int, default=30)
+    parser.add_argument("--trial", action="store_true")
     return parser.parse_args()
 
 
@@ -192,14 +200,6 @@ def load_done_seeds(log_file):
     return done
 
 
-def make_batch_dir(root: str, segment: str) -> Path:
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    prefix = f"{segment}_" if segment else ""
-    path = Path(root) / f"{prefix}{stamp}"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def extract_last_frame(video_path: Path, output_path: Path):
     subprocess.run([
         "ffmpeg", "-y", "-sseof", "-1",
@@ -216,7 +216,7 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str,
         if r["status"] != "ok":
             items_html.append(
                 f'<div class="item error">'
-                f'<div class="meta">seed={r["seed"]} · 失败 · {html.escape(r["error"])}</div>'
+                f'<div class="meta">{r["video_id"]} · seed={r["seed"]} · 失败 · {html.escape(r["error"])}</div>'
                 f'</div>'
             )
             continue
@@ -248,11 +248,11 @@ def render_review_html(batch_dir: Path, records: list, prompt_preview: str,
             f'<div class="item">'
             f'<span class="badge {badge_class}">{badge_text}</span>'
             f'<video src="{html.escape(rel)}" controls preload="metadata"></video>'
-            f'<div class="meta">seed={r["seed"]} · {r["elapsed"]:.0f}s · {size_mb:.2f}MB{metrics_str}</div>'
+            f'<div class="meta">{r["video_id"]} · seed={r["seed"]} · {r["elapsed"]:.0f}s · {size_mb:.2f}MB{metrics_str}</div>'
             f'{reasons_html}'
             f'<div class="actions">'
-            f'<button class="mark-btn like" data-batch="{batch_dir.name}" data-seed="{r["seed"]}" data-type="like">👍 喜欢</button>'
-            f'<button class="mark-btn reject" data-batch="{batch_dir.name}" data-seed="{r["seed"]}" data-type="reject">👎 淘汰</button>'
+            f'<button class="mark-btn like" data-batch="{batch_dir.name}" data-video="{r["video_id"]}" data-type="like">👍 喜欢</button>'
+            f'<button class="mark-btn reject" data-batch="{batch_dir.name}" data-video="{r["video_id"]}" data-type="reject">👎 淘汰</button>'
             f'</div>'
             f'<div class="path">{html.escape(rel)}</div>'
             f'</div>'
@@ -343,7 +343,9 @@ def main():
     log_path = Path(args.log)
     write_header = not log_path.exists()
 
-    batch_dir = make_batch_dir(args.batch_root, segment)
+    batch_name = short_batch_name(segment)
+    batch_dir = Path(args.batch_root) / batch_name
+    batch_dir.mkdir(parents=True, exist_ok=True)
     tail_dir = batch_dir / "tail_frames"
     tail_dir.mkdir(exist_ok=True)
 
@@ -361,18 +363,19 @@ def main():
         writer = csv.writer(f)
         if write_header:
             writer.writerow([
-                "timestamp", "episode", "segment", "seed", "duration",
-                "aspect_ratio", "megapixels", "status", "output_path",
-                "file_size", "elapsed_seconds", "error",
+                "timestamp", "episode", "segment", "batch", "video_id",
+                "seed", "duration", "aspect_ratio", "megapixels",
+                "status", "output_path", "file_size", "elapsed_seconds", "error",
             ])
             f.flush()
 
         for i, seed in enumerate(seeds, 1):
+            video_id = f"v{i:02d}"
             if seed in done_seeds:
-                print(f"[{i}/{len(seeds)}] [skip] seed={seed} 已完成（加 --force 可重跑）")
+                print(f"[{i}/{len(seeds)}] [skip] {video_id} seed={seed} 已完成")
                 continue
 
-            print(f"[{i}/{len(seeds)}] [run] seed={seed}")
+            print(f"[{i}/{len(seeds)}] [run] {video_id} seed={seed}")
             start = time.time()
             try:
                 adapter = WorkflowAdapter(args.profile)
@@ -389,49 +392,53 @@ def main():
                 path = adapter.run_once()
                 elapsed = time.time() - start
 
-                batch_file = batch_dir / f"seed_{seed}{path.suffix}"
+                short_seed = f"{seed % 1000000:06d}"
+                batch_file = batch_dir / f"{video_id}_seed{short_seed}{path.suffix}"
                 shutil.copy2(path, batch_file)
 
-                tail_path = tail_dir / f"seed_{seed}.png"
+                tail_path = tail_dir / f"{video_id}.png"
                 extract_last_frame(path, tail_path)
 
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    episode_id, segment, seed, args.duration,
-                    args.aspect_ratio, args.megapixels,
+                    episode_id, segment, batch_name, video_id,
+                    seed, args.duration, args.aspect_ratio, args.megapixels,
                     "ok", str(path), path.stat().st_size,
                     round(elapsed, 1), "",
                 ])
                 f.flush()
 
                 records.append({
-                    "seed": seed, "status": "ok",
+                    "video_id": video_id,
+                    "seed": seed,
+                    "status": "ok",
                     "batch_file": str(batch_file),
                     "file_size": path.stat().st_size,
                     "elapsed": elapsed, "error": "",
                 })
-                print(f"[{i}/{len(seeds)}] [ok] seed={seed} -> {batch_file.name} ({elapsed:.0f}s)")
-                print(f"    尾帧：{tail_path.name}")
+                print(f"[{i}/{len(seeds)}] [ok] {video_id} -> {batch_file.name} ({elapsed:.0f}s)")
 
             except Exception as e:
                 elapsed = time.time() - start
                 writer.writerow([
                     datetime.now().isoformat(timespec="seconds"),
-                    episode_id, segment, seed, args.duration,
-                    args.aspect_ratio, args.megapixels,
+                    episode_id, segment, batch_name, video_id,
+                    seed, args.duration, args.aspect_ratio, args.megapixels,
                     "error", "", "", round(elapsed, 1), str(e),
                 ])
                 f.flush()
 
                 records.append({
-                    "seed": seed, "status": "error",
+                    "video_id": video_id,
+                    "seed": seed,
+                    "status": "error",
                     "batch_file": "", "file_size": 0,
                     "elapsed": elapsed, "error": str(e),
                 })
-                print(f"[{i}/{len(seeds)}] [error] seed={seed}: {e}")
+                print(f"[{i}/{len(seeds)}] [error] {video_id} seed={seed}: {e}")
 
                 if i < len(seeds):
-                    print(f"  等待 {args.retry_delay} 秒让 ComfyUI 清理显存，再跑下一个...")
+                    print(f"  等待 {args.retry_delay} 秒让 ComfyUI 清理显存...")
                     time.sleep(args.retry_delay)
 
     if records:
@@ -442,14 +449,13 @@ def main():
         if suspects:
             print(f"发现 {len(suspects)} 个可疑视频：")
             for r in suspects:
-                print(f"  seed={r['seed']}: {'; '.join(r['quality']['reasons'])}")
+                print(f"  {r['video_id']} seed={r['seed']}: {'; '.join(r['quality']['reasons'])}")
         else:
             print("所有成功视频都通过了技术检测。")
 
     preview = prompt_text[:200].replace("\n", " ")
     review_path = render_review_html(batch_dir, records, preview, episode_id)
     print(f"\n审片页面：{review_path.resolve()}")
-    print("用浏览器打开这个文件即可一次性查看本批视频（可疑的排在前面）。")
 
 
 if __name__ == "__main__":

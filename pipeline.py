@@ -12,12 +12,10 @@ def parse_args():
     parser.add_argument("--profile", default="workflow_profile_2.json")
     parser.add_argument("--count", type=int, default=3)
     parser.add_argument("--megapixels", type=float, default=1.5)
-    parser.add_argument("--duration", type=float, default=0.0,
-                        help="0 表示从 segments/<name>/meta.json 读")
+    parser.add_argument("--duration", type=float, default=0.0)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--batch-root", default="batches")
-    parser.add_argument("--trial", action="store_true",
-                        help="试验模式：duration=5, megapixels=1.0, count=1")
+    parser.add_argument("--trial", action="store_true")
     return parser.parse_args()
 
 
@@ -36,7 +34,7 @@ def load_refs(seg_name):
 
 def find_tail_ref(refs):
     for ref in refs:
-        m = re.match(r"tail_from_(\w+)\.png$", ref)
+        m = re.match(r"tail_from_(seg_\d+[a-z]?)\.png$", ref)
         if m:
             return m.group(1), ref
     return None, None
@@ -52,16 +50,47 @@ def load_duration(seg_name, explicit_duration):
     return 10.0
 
 
+def resolve_video_in_batch(batch_dir: Path, token: str):
+    """
+    token 可能是：
+    - v01（新格式）
+    - seed_4998931468864972（旧格式）
+    """
+    if re.fullmatch(r"v\d{2}", token):
+        matches = sorted(batch_dir.glob(f"{token}_*.mp4"))
+        if matches:
+            return matches[0]
+
+    m = re.match(r"(?:seed_)?(\d+)$", token)
+    if m:
+        seed = int(m.group(1))
+        matches = [
+            p for p in batch_dir.glob(f"seed_{seed}.*")
+            if p.suffix.lower() == ".mp4"
+        ]
+        if matches:
+            return matches[0]
+        matches = sorted(batch_dir.glob(f"v*_seed{seed % 1000000:06d}.mp4"))
+        if matches:
+            return matches[0]
+
+    return None
+
+
 def find_selected_video(prev_seg, batch_root):
-    """只用最新批次：优先 liked，其次第一个 mp4。忽略旧批次的 liked。"""
-    all_batches = sorted(
-        [d for d in Path(batch_root).iterdir()
-         if d.is_dir() and d.name.startswith(prev_seg + "_")],
-        reverse=True,
-    )
+    """按目录 mtime 排序，取最新批次。兼容新格式 seg01_ 和旧格式 seg_01_。"""
+    compact = prev_seg.replace("_", "")
+    all_batches = [
+        d for d in Path(batch_root).iterdir()
+        if d.is_dir() and (
+            d.name.startswith(compact + "_") or
+            d.name.startswith(prev_seg + "_")
+        )
+    ]
     if not all_batches:
         raise SystemExit(f"找不到 {prev_seg} 的任何批次")
 
+    all_batches.sort(key=lambda d: d.stat().st_mtime, reverse=True)
     latest = all_batches[0]
     print(f"[latest] 使用最新批次：{latest.name}")
 
@@ -70,17 +99,11 @@ def find_selected_video(prev_seg, batch_root):
         data = json.loads(marks_path.read_text(encoding="utf-8"))
         for key in data.get("liked", []):
             if key.startswith(latest.name + "/"):
-                seed_part = key.split("/")[1]
-                m = re.match(r"(?:seed_)?(\d+)$", seed_part)
-                if m:
-                    seed = int(m.group(1))
-                    matches = [
-                        p for p in latest.glob(f"seed_{seed}.*")
-                        if p.suffix.lower() == ".mp4"
-                    ]
-                    if matches:
-                        print(f"[liked] 最新批次的喜欢项：{key}")
-                        return matches[0]
+                token = key.split("/", 1)[1]
+                video = resolve_video_in_batch(latest, token)
+                if video:
+                    print(f"[liked] 最新批次的喜欢项：{key}")
+                    return video
 
     mp4s = sorted(latest.glob("*.mp4"))
     if not mp4s:
@@ -104,6 +127,20 @@ def extract_last_frame(video_path, output_path):
     ], check=True, capture_output=True, timeout=120)
 
 
+def clean_old_tails(input_dir: Path, keep_name: str = ""):
+    """删除 input 目录下所有 tail_*.png，避免和上次混淆。"""
+    if not input_dir.exists():
+        return
+    for f in input_dir.glob("tail_*.png"):
+        if keep_name and f.name == keep_name:
+            continue
+        try:
+            f.unlink()
+            print(f"  [clean] 删除旧尾帧：{f.name}")
+        except OSError as e:
+            print(f"  [clean] 无法删除 {f.name}: {e}")
+
+
 def prepare_tail(prev_seg, tail_name, profile_path, batch_root):
     video = find_selected_video(prev_seg, batch_root)
     print(f"上一段选中视频：{video}")
@@ -111,6 +148,8 @@ def prepare_tail(prev_seg, tail_name, profile_path, batch_root):
     input_dir = get_input_dir(profile_path)
     if not input_dir.exists():
         raise SystemExit(f"input 目录不存在：{input_dir}")
+
+    clean_old_tails(input_dir, keep_name=tail_name)
 
     tmp = Path(batch_root) / f"_tmp_tail_{prev_seg}.png"
     extract_last_frame(video, tmp)
