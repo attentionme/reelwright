@@ -102,6 +102,8 @@ DEFAULT_CONFIG = {
     "comfyui_url": "http://127.0.0.1:8188",
 }
 
+# 全局变量：存储 Agent 提议的待确认修改
+PENDING_UPDATE = {}
 
 def _read_config() -> dict:
     if not CONFIG_PATH.exists():
@@ -342,7 +344,48 @@ set_tracing_disabled(disabled=True)
 
 
 # ============================================================
-# 集状态检查工具（只读，不执行任何生成脚本）
+# 配置写工具（安全 Diff 确认机制）
+# ============================================================
+
+@function_tool
+def propose_config_update(target: str, new_value: str) -> str:
+    """
+    当用户要求修改系统配置时调用此工具，比如修改 ComfyUI 地址或工作流输出目录。
+    target 可以是 'comfyui_url' 或 'output_dir'。
+    调用后，会生成一个修改请求，用户必须在界面手动确认后才会生效。
+    """
+    global PENDING_UPDATE
+    
+    target = target.strip()
+    new_value = new_value.strip()
+    
+    if target == "comfyui_url":
+        config = _read_config()
+        old_value = config.get("comfyui_url", "http://127.0.0.1:8188")
+        PENDING_UPDATE = {"target": target, "old": old_value, "new": new_value}
+        return "✅ 已生成修改提议，请在【后台任务】->【待确认修改】区域查看 Diff 并点击确认。"
+        
+    elif target == "output_dir":
+        root = Path(__file__).resolve().parent
+        profile_name = "workflow_profile_2.json"
+        for p in (root / "workflows", root):
+            f = p / profile_name
+            if f.exists():
+                try:
+                    prof = json.loads(f.read_text(encoding="utf-8"))
+                    old_value = prof.get("output_dir", "")
+                    PENDING_UPDATE = {"target": target, "old": old_value, "new": new_value}
+                    return "✅ 已生成修改提议，请在【后台任务】->【待确认修改】区域查看 Diff 并点击确认。"
+                except Exception:
+                    return "❌ 读取工作流配置文件失败。"
+        return "❌ 找不到 workflow_profile_2.json。"
+        
+    else:
+        return f"❌ 不支持的配置项：{target}。仅支持 comfyui_url 和 output_dir。"
+
+
+# ============================================================
+# 集状态检查工具
 # ============================================================
 
 @function_tool
@@ -434,7 +477,7 @@ def summarize_review() -> str:
 
 
 # ============================================================
-# 后台生成任务工具（真正执行，通过 task_manager.py）
+# 后台生成任务工具
 # ============================================================
 
 @function_tool
@@ -687,6 +730,13 @@ INSTR_AGENT_WORKFLOW = (
     "挑片这一步必须由用户打开 review.html 亲自完成。"
 )
 
+INSTR_CONFIG_UPDATE = (
+    "当用户提出要修改系统配置，比如“把 ComfyUI 地址改成...”，或“把输出目录改成...”时，"
+    "调用 propose_config_update 工具。"
+    "参数 target 可以为 'comfyui_url' 或 'output_dir'，new_value 为新路径。"
+    "调用该工具后，必须明确告诉用户：“请前往【后台任务】标签页的【待确认修改】区域，点击确认按钮以生效”。"
+)
+
 INSTR_TOOL_LIMITS = (
     "当前工具无法检查字幕、音轨内容、"
     "画面中的角色风格、构图或每个镜头的实际数量。"
@@ -704,6 +754,7 @@ INSTRUCTIONS = "\n\n".join(
         INSTR_CONFIG_FIELDS,
         INSTR_DIRECTORY,
         INSTR_AGENT_WORKFLOW,
+        INSTR_CONFIG_UPDATE,
         INSTR_TOOL_LIMITS,
     ]
 )
@@ -754,6 +805,7 @@ def build_agent(api_key_override: str = ""):
             start_generation,
             check_generation,
             list_generations,
+            propose_config_update, # 注册新工具
         ],
     )
 
@@ -980,6 +1032,7 @@ def _load_sys_config():
     
     profile_name = "workflow_profile_2.json"
     root = Path(__file__).resolve().parent
+    out_dir = ""
     for p in (root / "workflows", root):
         f = p / profile_name
         if f.exists():
@@ -1025,6 +1078,45 @@ def _open_folder(path):
         import webbrowser
         webbrowser.open(Path(path).as_uri())
     return "✅ 已打开目录"
+
+
+def _check_pending_diff():
+    """定时刷新待确认区域"""
+    global PENDING_UPDATE
+    if not PENDING_UPDATE:
+        return gr.update(value="暂无待确认的修改。", visible=False), gr.update(visible=False)
+    
+    t = PENDING_UPDATE["target"]
+    old = PENDING_UPDATE["old"]
+    new = PENDING_UPDATE["new"]
+    
+    md = (
+        f"### ⚠️ 待确认的修改\n"
+        f"**目标配置**：`{t}`\n\n"
+        f"**旧值**：\n`{old}`\n\n"
+        f"**新值**：\n`{new}`\n"
+    )
+    return gr.update(value=md, visible=True), gr.update(visible=True)
+
+
+def _apply_pending_update():
+    """点击确认按钮后执行写入"""
+    global PENDING_UPDATE
+    if not PENDING_UPDATE:
+        return "没有待确认的修改。"
+    
+    t = PENDING_UPDATE["target"]
+    new = PENDING_UPDATE["new"]
+    
+    if t == "comfyui_url":
+        res = _save_comfy_url(new)
+    elif t == "output_dir":
+        res = _save_output_dir(new)
+    else:
+        res = "未知目标"
+        
+    PENDING_UPDATE = {}  # 清空
+    return res
 
 
 def _collect_tasks():
@@ -1400,6 +1492,13 @@ with gr.Blocks(
             
             config_msg = gr.Markdown("")
 
+            # 待确认修改面板 (Agent 写工具联动)
+            with gr.Group(visible=False) as pending_group:
+                gr.Markdown("---")
+                pending_diff_md = gr.Markdown("")
+                apply_pending_btn = gr.Button("✅ 确认应用修改", variant="primary")
+                pending_result_md = gr.Markdown("")
+
             demo.load(fn=_segment_choices, outputs=[gen_segment])
             demo.load(
                 fn=_handle_refresh_wf,
@@ -1415,6 +1514,12 @@ with gr.Blocks(
             save_url_btn.click(fn=_save_comfy_url, inputs=[input_comfy_url], outputs=[config_msg])
             save_dir_btn.click(fn=_save_output_dir, inputs=[input_output_dir], outputs=[config_msg])
             open_dir_btn.click(fn=_open_folder, inputs=[input_output_dir], outputs=[config_msg])
+
+            # 确认应用按钮
+            apply_pending_btn.click(
+                fn=_apply_pending_update,
+                outputs=[pending_result_md]
+            )
 
             refresh_tasks_btn.click(
                 fn=_refresh_tasks_full,
@@ -1487,10 +1592,14 @@ with gr.Blocks(
                 outputs=[review_msg],
             )
 
+    # 定时任务 (5秒轮询)
     task_timer = gr.Timer(value=5, active=True)
     task_timer.tick(
         fn=_refresh_tasks_table,
         outputs=[task_table],
+    ).then(
+        fn=_check_pending_diff,
+        outputs=[pending_diff_md, pending_group]
     )
 
 
