@@ -572,7 +572,13 @@ def start_generation(
     当用户说“帮我跑 seg_XX”“重跑 seg_XX”“生成 seg_XX”时调用。
     本工具会在后台运行 pipeline.py，不会阻塞对话。启动后立即返回 task_id。
     """
-    from task_manager import start_task
+    from task_manager import start_task, comfyui_online
+
+    if not comfyui_online():
+        return json.dumps({
+            "error": "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
+                     "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
+        }, ensure_ascii=False)
 
     args = [
         "--segment", segment,
@@ -583,7 +589,7 @@ def start_generation(
         args.append("--force")
 
     try:
-        task = start_task("pipeline.py", args)
+        task = start_task("pipeline.py", args, check_comfy=False)
     except Exception as exc:
         return json.dumps(
             {"error": f"启动失败：{type(exc).__name__}: {exc}"},

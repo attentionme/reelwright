@@ -17,6 +17,8 @@ ALLOWED_SCRIPTS = {
     "plan_segments.py",
 }
 
+COMFYUI_URL = "http://127.0.0.1:8188/system_stats"
+
 
 def _task_path(task_id: str) -> Path:
     return TASKS_DIR / f"{task_id}.json"
@@ -47,14 +49,35 @@ def _tail_log(path: Path, n_bytes: int = 3000) -> str:
         return f.read().decode("utf-8", errors="replace")
 
 
-def start_task(script: str, args: list) -> dict:
+def comfyui_online(timeout: float = 3.0) -> bool:
+    """检查 ComfyUI 是否在线。"""
+    import urllib.request
+    try:
+        urllib.request.urlopen(COMFYUI_URL, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def start_task(script: str, args: list, check_comfy: bool = True) -> dict:
     if script not in ALLOWED_SCRIPTS:
         raise ValueError(f"不允许执行：{script}")
+
+    if check_comfy and script in {"pipeline.py", "run_episode.py"}:
+        if not comfyui_online():
+            raise RuntimeError(
+                "ComfyUI 未启动或无法连接（127.0.0.1:8188）。"
+                "请先打开 ComfyUI 桌面版，等 Web 界面能访问后再试。"
+            )
 
     task_id = f"t{int(time.time())}_{uuid.uuid4().hex[:6]}"
     log_file = _log_path(task_id)
 
     cmd = [str(Path(".venv") / "Scripts" / "python.exe"), script] + args
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
 
     with log_file.open("w", encoding="utf-8") as f:
         proc = subprocess.Popen(
@@ -62,6 +85,7 @@ def start_task(script: str, args: list) -> dict:
             stdout=f,
             stderr=subprocess.STDOUT,
             cwd=str(Path(__file__).parent),
+            env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
 
